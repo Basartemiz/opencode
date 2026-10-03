@@ -1705,6 +1705,10 @@ export type AgentConfig = {
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
   steps?: number
   maxSteps?: number
+  checkpoint?: {
+    edits?: number
+    lines?: number
+  }
   permission?: PermissionConfig
   [key: string]:
     | unknown
@@ -1729,6 +1733,10 @@ export type AgentConfig = {
     | "error"
     | "info"
     | number
+    | {
+        edits?: number
+        lines?: number
+      }
     | PermissionConfig
     | undefined
 }
@@ -2370,6 +2378,10 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  checkpoint?: {
+    edits: number
+    lines: number
+  }
 }
 
 export type LspStatus = {
