@@ -1,0 +1,17 @@
+Pause so the user can review the change you just made, then continue with their decision.
+
+OpenCode computes the exact diff since the previous checkpoint and shows it to the user next to your explanation. The user then approves the step, asks for a revision, or stops the run.
+
+When to call it:
+- After each meaningful change: one logical unit of work, such as adding a function, updating its callers, or adding a test.
+- On its own, after your edits have finished. Never call it in the same response as an edit.
+- Only when you changed files since the last checkpoint.
+
+Parameters:
+- title: a short name for the step (3-8 words)
+- why: one or two sentences on why you made this change
+- impact: one or two sentences on what this change affects, such as callers, behavior, or tests
+
+The result tells you what the user decided:
+- Approved: continue with the next step.
+- Revision requested: apply the user's feedback to the same step, then call checkpoint again before starting anything new.

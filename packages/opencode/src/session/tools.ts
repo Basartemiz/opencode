@@ -1,4 +1,5 @@
 import { Agent } from "@/agent/agent"
+import { Checkpoint } from "@/checkpoint"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -55,6 +56,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
+  const gate = Checkpoint.gate(input.agent, input.messages)
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -108,7 +110,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
-            const result = yield* item.execute(args, ctx)
+            const result = yield* gate ? gate.run(item.id, item.execute(args, ctx)) : item.execute(args, ctx)
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({

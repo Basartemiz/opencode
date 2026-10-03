@@ -15,6 +15,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
+import { Checkpoint } from "@/checkpoint"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
 import path from "path"
@@ -52,6 +53,7 @@ export const Info = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
+  checkpoint: Schema.optional(Checkpoint.Limits),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -126,6 +128,7 @@ const layer = Layer.effect(
           question: "deny",
           plan_enter: "deny",
           plan_exit: "deny",
+          checkpoint: "deny",
           // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
           read: {
             "*": "allow",
@@ -172,6 +175,26 @@ const layer = Layer.effect(
                   "*": "deny",
                   [path.join(".opencode", "plans", "*.md")]: "allow",
                   [path.relative(ctx.worktree, path.join(Global.Path.data, path.join("plans", "*.md")))]: "allow",
+                },
+              }),
+              user,
+            ),
+            mode: "primary",
+            native: true,
+          },
+          understand: {
+            name: "understand",
+            description:
+              "Understand mode. Works in small steps and pauses after each one so you can review the change.",
+            options: {},
+            checkpoint: Checkpoint.LIMITS,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                question: "allow",
+                checkpoint: "allow",
+                task: {
+                  general: "deny",
                 },
               }),
               user,
@@ -289,6 +312,7 @@ const layer = Layer.effect(
           item.hidden = value.hidden ?? item.hidden
           item.name = value.name ?? item.name
           item.steps = value.steps ?? item.steps
+          if (value.checkpoint) item.checkpoint = { ...(item.checkpoint ?? Checkpoint.LIMITS), ...value.checkpoint }
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }

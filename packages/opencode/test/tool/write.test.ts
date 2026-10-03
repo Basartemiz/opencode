@@ -170,6 +170,17 @@ describe("tool.write", () => {
         expect(result.metadata).toHaveProperty("exists", true)
       }),
     )
+
+    it.instance("reports how many lines the write added and removed", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "file.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "a\nb\nc\n", "utf-8"))
+        const result = yield* run({ filePath: filepath, content: "a\nB\nc\nd\n" })
+
+        expect(result.metadata.filediff).toMatchObject({ file: filepath, additions: 2, deletions: 1 })
+      }),
+    )
   })
 
   describe("file permissions", () => {

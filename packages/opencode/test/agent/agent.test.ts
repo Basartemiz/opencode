@@ -50,6 +50,7 @@ it.instance("returns default native agents when no config", () =>
     const names = agents.map((a) => a.name)
     expect(names).toContain("build")
     expect(names).toContain("plan")
+    expect(names).toContain("understand")
     expect(names).toContain("general")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
@@ -103,6 +104,56 @@ it.instance(
       permission: {
         task: {
           general: "allow",
+        },
+      },
+    },
+  },
+)
+
+it.instance("understand agent edits files and pauses at checkpoints", () =>
+  Effect.gen(function* () {
+    const understand = yield* load((svc) => svc.get("understand"))
+    expect(understand).toBeDefined()
+    expect(understand?.mode).toBe("primary")
+    expect(understand?.native).toBe(true)
+    expect(evalPerm(understand, "edit")).toBe("allow")
+    expect(evalPerm(understand, "checkpoint")).toBe("allow")
+    expect(evalPerm(understand, "question")).toBe("allow")
+    expect(understand?.checkpoint).toEqual({ edits: 5, lines: 100 })
+    // Agent options are sent to the model provider, so the limits must not live there.
+    expect(understand?.options).toEqual({})
+  }),
+)
+
+it.instance("understand agent denies the general subagent, which would edit without checkpoints", () =>
+  Effect.gen(function* () {
+    const understand = yield* load((svc) => svc.get("understand"))
+    expect(Permission.evaluate("task", "general", understand!.permission).action).toBe("deny")
+    expect(Permission.evaluate("task", "explore", understand!.permission).action).toBe("allow")
+  }),
+)
+
+it.instance("only the understand agent can call checkpoint", () =>
+  Effect.gen(function* () {
+    expect(evalPerm(yield* load((svc) => svc.get("build")), "checkpoint")).toBe("deny")
+    expect(evalPerm(yield* load((svc) => svc.get("plan")), "checkpoint")).toBe("deny")
+    expect(evalPerm(yield* load((svc) => svc.get("general")), "checkpoint")).toBe("deny")
+  }),
+)
+
+it.instance(
+  "understand checkpoint limits can be changed in config",
+  () =>
+    Effect.gen(function* () {
+      const understand = yield* load((svc) => svc.get("understand"))
+      expect(understand?.checkpoint).toEqual({ edits: 3, lines: 100 })
+      expect(understand?.options).toEqual({})
+    }),
+  {
+    config: {
+      agent: {
+        understand: {
+          checkpoint: { edits: 3 },
         },
       },
     },
@@ -749,6 +800,7 @@ it.instance(
       agent: {
         build: { disable: true },
         plan: { disable: true },
+        understand: { disable: true },
       },
     },
   },

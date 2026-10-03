@@ -2,6 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { PlanExitTool } from "./plan"
+import { CheckpointTool } from "./checkpoint"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -41,6 +42,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
 import { LSP } from "@/lsp/lsp"
+import { Snapshot } from "@/snapshot"
 import { Instruction } from "../session/instruction"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -105,6 +107,7 @@ const layer = Layer.effect(
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
+    const checkpoint = yield* CheckpointTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -223,6 +226,7 @@ const layer = Layer.effect(
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          checkpoint: Tool.init(checkpoint),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
@@ -243,6 +247,7 @@ const layer = Layer.effect(
             tool.search,
             tool.skill,
             tool.patch,
+            tool.checkpoint,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
@@ -438,6 +443,7 @@ export const node = LayerNode.make({
     BackgroundJob.node,
     Provider.node,
     LSP.node,
+    Snapshot.node,
     Instruction.node,
     FSUtil.node,
     EventV2Bridge.node,

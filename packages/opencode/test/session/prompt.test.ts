@@ -2468,3 +2468,181 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+// Understand mode: the agent works in small steps and pauses at checkpoints the user reviews.
+
+const understandCfg = (url: string) => ({
+  ...providerCfg(url),
+  agent: { understand: { checkpoint: { edits: 2 } } },
+})
+
+const understand = Effect.fn("test.understand")(function* (text: string) {
+  const prompt = yield* SessionPrompt.Service
+  const sessions = yield* Session.Service
+  const chat = yield* sessions.create({
+    title: "Understand",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+  yield* prompt.prompt({
+    sessionID: chat.id,
+    agent: "understand",
+    model: ref,
+    noReply: true,
+    parts: [{ type: "text", text }],
+  })
+  return chat.id
+})
+
+const toolParts = (sessionID: SessionID, tool: string) =>
+  MessageV2.filterCompactedEffect(sessionID).pipe(
+    Effect.map((msgs) =>
+      msgs
+        .flatMap((msg) => msg.parts)
+        .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === tool),
+    ),
+  )
+
+const answerCheckpoint = Effect.fn("test.answerCheckpoint")(function* (label: string) {
+  const question = yield* Question.Service
+  const asked = yield* pollWithTimeout(
+    question.list().pipe(Effect.map((items) => items[0])),
+    "checkpoint never asked the user",
+    "10 seconds",
+  )
+  yield* question.reply({ requestID: asked.id, answers: [[label]] })
+  return asked
+})
+
+it.instance(
+  "understand mode tells the model to work in small steps and offers the checkpoint tool",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.text("ok")
+      const sessionID = yield* understand("add a greeting")
+
+      yield* prompt.loop({ sessionID })
+
+      const body = JSON.stringify((yield* llm.hits)[0]?.body)
+      expect(body).toContain("Understand Mode")
+      expect(body).toContain('"name":"checkpoint"')
+      // The checkpoint limits are OpenCode settings, not provider request options.
+      expect(body).not.toContain('"edits"')
+    }),
+  { git: true },
+)
+
+it.instance(
+  "understand mode blocks an edit once the agent skips too many checkpoints",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(understandCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* Effect.forEach(["a.txt", "b.txt", "c.txt"], (name) =>
+        llm.tool("write", { filePath: path.join(dir, name), content: `${name}\n` }),
+      )
+      yield* llm.text("done")
+      const sessionID = yield* understand("write three files")
+
+      yield* prompt.loop({ sessionID })
+
+      const writes = yield* toolParts(sessionID, "write")
+      expect(writes.map((part) => part.state.status)).toEqual(["completed", "completed", "error"])
+      const blocked = writes[2]?.state
+      expect(blocked?.status === "error" ? blocked.error : "").toContain("Checkpoint required")
+      expect(yield* Effect.promise(() => Bun.file(path.join(dir, "c.txt")).exists())).toBe(false)
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "the agent continues after the user approves a checkpoint",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      const asked = yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+
+      expect(asked.questions[0]?.question).toContain("greet.txt")
+      expect(yield* llm.hits).toHaveLength(3)
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoint?.state.status).toBe("completed")
+      expect(checkpoint?.state.status === "completed" ? checkpoint.state.metadata.decision : undefined).toBe("approve")
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "stopping at a checkpoint ends the run",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      const sessionID = yield* understand("add a greeting file")
+
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* answerCheckpoint("Stop")
+      yield* Fiber.join(loop)
+
+      expect(yield* llm.hits).toHaveLength(2)
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoint?.state.status).toBe("error")
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "understand mode asks for a final checkpoint when the agent stops with unreviewed changes",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.text("done")
+      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      yield* llm.text("all reviewed")
+      const sessionID = yield* understand("add a greeting file")
+
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+
+      expect(yield* llm.hits).toHaveLength(4)
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoint?.state.status).toBe("completed")
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "understand mode asks for the final checkpoint only once",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.text("done")
+      yield* llm.text("still done")
+      const sessionID = yield* understand("add a greeting file")
+
+      yield* prompt.loop({ sessionID })
+
+      expect(yield* llm.hits).toHaveLength(3)
+    }),
+  { git: true },
+  15_000,
+)

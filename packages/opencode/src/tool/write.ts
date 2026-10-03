@@ -3,7 +3,7 @@ import * as path from "path"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
-import { createTwoFilesPatch } from "diff"
+import { createTwoFilesPatch, diffLines } from "diff"
 import DESCRIPTION from "./write.txt"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FileSystem } from "@opencode-ai/core/filesystem"
@@ -89,12 +89,19 @@ export const WriteTool = Tool.define(
             output += `\n\nLSP errors detected in other files:\n${block}`
           }
 
+          const changes = diffLines(contentOld, contentNew)
           return {
             title: path.relative(instance.worktree, filepath),
             metadata: {
               diagnostics,
               filepath,
               exists: exists,
+              filediff: {
+                file: filepath,
+                patch: diff,
+                additions: changes.reduce((total, change) => total + (change.added ? change.count : 0), 0),
+                deletions: changes.reduce((total, change) => total + (change.removed ? change.count : 0), 0),
+              },
             },
             output,
           }

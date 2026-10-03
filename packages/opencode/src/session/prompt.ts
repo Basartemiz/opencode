@@ -55,6 +55,7 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { Checkpoint } from "@/checkpoint"
 import { LLMEvent } from "@opencode-ai/llm"
 
 // @ts-ignore
@@ -78,6 +79,9 @@ IMPORTANT:
 - The input must be valid JSON matching the required schema
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
+
+const FINAL_CHECKPOINT =
+  "You changed files since the last checkpoint and the user has not reviewed them yet. Call the checkpoint tool for these changes now, before you finish."
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
@@ -1078,6 +1082,41 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    // Agents with checkpoint limits get one reminder when they finish with changes the user has not reviewed.
+    const requestFinalCheckpoint = Effect.fn("SessionPrompt.requestFinalCheckpoint")(function* (input: {
+      sessionID: SessionID
+      user: SessionV1.User
+      msgs: SessionV1.WithParts[]
+    }) {
+      const agent = yield* agents.get(input.user.agent)
+      if (!agent?.checkpoint) return false
+      if (Checkpoint.usage(input.msgs, agent.name).edits === 0) return false
+      const reminded = input.msgs.some(
+        (msg) =>
+          msg.info.id === input.user.id &&
+          msg.parts.some((part) => part.type === "text" && part.synthetic && part.text === FINAL_CHECKPOINT),
+      )
+      if (reminded) return false
+      const msg: SessionV1.User = {
+        id: MessageID.ascending(),
+        sessionID: input.sessionID,
+        role: "user",
+        time: { created: Date.now() },
+        agent: input.user.agent,
+        model: input.user.model,
+      }
+      yield* sessions.updateMessage(msg)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: msg.id,
+        sessionID: input.sessionID,
+        type: "text",
+        text: FINAL_CHECKPOINT,
+        synthetic: true,
+      })
+      return true
+    })
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
@@ -1114,6 +1153,7 @@ const layer = Layer.effect(
             !hasToolCalls &&
             lastAssistant.parentID === lastUser.id
           ) {
+            if (yield* requestFinalCheckpoint({ sessionID, user: lastUser, msgs })) continue
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )

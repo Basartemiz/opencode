@@ -100,6 +100,15 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  it.instance("registers the checkpoint tool used by understand mode", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("checkpoint")
+    }),
+  )
+
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

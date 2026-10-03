@@ -35,6 +35,15 @@ const AgentSchema = Schema.StructWithRest(
       description: "Maximum number of agentic iterations before forcing text-only response",
     }),
     maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
+    checkpoint: Schema.optional(
+      Schema.Struct({
+        edits: Schema.optional(PositiveInt),
+        lines: Schema.optional(PositiveInt),
+      }),
+    ).annotate({
+      description:
+        "Block further edits until the agent calls the checkpoint tool after this many edits or changed lines (used by the understand agent)",
+    }),
     permission: Schema.optional(ConfigPermissionV1.Info),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
@@ -53,6 +62,7 @@ const KNOWN_KEYS = new Set([
   "color",
   "steps",
   "maxSteps",
+  "checkpoint",
   "options",
   "permission",
   "disable",
