@@ -86,7 +86,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(outDir, "screensh
   const count = await page.locator("button.pill").count()
   for (let index = 0; index < count; index++) {
     await click(page, "button.pill", index)
-    if ((await page.locator("button.node", { hasText: /missing/i }).count()) > 0) break
+    if ((await page.locator("button.node", { hasText: /missing|not in the project/i }).count()) > 0) break
   }
   if (await heading(page, "How it works")) await shot(page, "03-map-flow-checked-against-imports.png")
   if (await heading(page, "May be affected")) await shot(page, "03b-map-may-be-affected.png")
@@ -119,9 +119,12 @@ const shot = (page, name) => page.screenshot({ path: path.join(outDir, "screensh
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }))
     await page.waitForTimeout(700)
     await click(page, "button.pill", index)
-    await caption(page, `Checkpoint ${index + 1} of ${pills}: ${labels[index].replace(/^\d+(r\d+)?/, "").replace(/(Approved|Revision asked|Stopped)$/, "").trim()}`)
+    // Pill text looks like "2r2Add suspended members…Approved": checkpoint 2, revision 2.
+    const [, number, revision] = labels[index].match(/^(\d+)(?:r(\d+))?/) || []
+    const title = labels[index].replace(/^\d+(r\d+)?/, "").replace(/(Approved|Revision asked|Stopped)$/, "").trim()
+    await caption(page, `Checkpoint ${number}${revision ? `, revision ${revision}` : ""}: ${title}`)
     await page.waitForTimeout(2200)
-    const missing = page.locator("button.node", { hasText: /missing/i })
+    const missing = page.locator("button.node", { hasText: /missing|not in the project/i })
     const flagged = (await missing.count()) > 0
     const full = index === 0 || flagged
     if (full && (await heading(page, "The big picture"))) {
@@ -130,7 +133,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(outDir, "screensh
     }
     if (await heading(page, "How it works")) {
       if (flagged) {
-        await caption(page, "The agent says it added a route file, but that file does not exist: the map marks it as missing")
+        await caption(page, "The agent says it added a route file in routes/, but that file does not exist: the map marks it as not in the project")
         await missing.first().hover()
         await page.waitForTimeout(5500)
       } else {

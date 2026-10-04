@@ -1,0 +1,11 @@
+{
+  "created": "2026-10-04T21:14+03:00",
+  "share": "https://docs.google.com/forms/d/e/1FAIpQLScn4ktzqWPJkZRWuZE85qw_WH-FZckF8AjZnbjRRctyYdTTQw/viewform",
+  "edit": "https://docs.google.com/forms/d/13CwRUZ_GIi-1RKT5M1wmDXCPVVLlhY2xy3uSIlq76Gk/edit",
+  "responses_sheet": "https://docs.google.com/spreadsheets/d/1s4qTBnK0qR_yHLY83wVmxuxgM3ZmkvfRgubLvVrPjmA/edit",
+  "pages": {
+    "A": "https://basartemiz.github.io/opencode/study/survey/A.html",
+    "B": "https://basartemiz.github.io/opencode/study/survey/B.html"
+  },
+  "export": "Sheet -> File -> Download -> CSV, save as study/data/responses.csv, then: python3 study/survey/score.py"
+}

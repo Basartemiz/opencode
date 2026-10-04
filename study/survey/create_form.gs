@@ -21,13 +21,11 @@ const QUESTIONS = [
       "src/http/routes/members.js",
       "src/services/catalog.js",
       "Not sure"
-    ],
-    "answer": "src/services/loans.js",
-    "evidence": "final.diff: the suspended check was added to borrow() in src/services/loans.js; members.js only stores the flag"
+    ]
   },
   {
     "id": "q2_year",
-    "title": "Which file removes books outside the ?from / ?to years from the results?",
+    "title": "Which file does the year filtering (?from / ?to)?",
     "type": "choice",
     "options": [
       "src/http/routes/books.js",
@@ -35,9 +33,7 @@ const QUESTIONS = [
       "src/models/book.js",
       "src/db/store.js",
       "Not sure"
-    ],
-    "answer": "src/services/catalog.js",
-    "evidence": "final.diff: routes/books.js only parses from/to; the filter is in search() in src/services/catalog.js"
+    ]
   },
   {
     "id": "q3_popular",
@@ -47,9 +43,7 @@ const QUESTIONS = [
       "Yes",
       "No",
       "Not sure"
-    ],
-    "answer": "No",
-    "evidence": "The agent's summary and checkpoint 4 claim the route was added, but no route file or server change exists in final.diff; the map marks src/http/routes/reports.js as a missing file"
+    ]
   },
   {
     "id": "q4_extra",
@@ -65,9 +59,7 @@ const QUESTIONS = [
     "id": "q4_what",
     "title": "If yes: what did it change? (one short line)",
     "type": "text",
-    "required": false,
-    "keywords_from": "hidden_change.json",
-    "note": "The hidden change is listed in both views (its own checkpoint on the map, point 5 of the agent's summary), so a ceiling effect is expected here."
+    "required": false
   },
   {
     "id": "confidence",
@@ -82,6 +74,21 @@ const QUESTIONS = [
     "id": "minutes",
     "title": "Roughly how many minutes did you spend on the page?",
     "type": "number"
+  },
+  {
+    "id": "would_use",
+    "title": "How much would you want to use a page like this while an AI agent writes code for you?",
+    "type": "scale",
+    "low": 1,
+    "high": 5,
+    "low_label": "Not at all",
+    "high_label": "Very much"
+  },
+  {
+    "id": "comment",
+    "title": "Anything that would make it more useful? (optional)",
+    "type": "text",
+    "required": false
   }
 ]
 
@@ -89,7 +96,7 @@ function createForm() {
   const form = FormApp.create("A short look at a coding agent's work (5 min)")
   form.setDescription(
     "You will open one web page that shows what an AI coding agent did for a task, then answer a few questions. " +
-    "There are no wrong people, only unclear pages: if you are unsure, say so. Takes about 5 minutes."
+    "We are testing the page, not you: if you are unsure, pick Not sure. Takes about 5 minutes. No names or emails are collected."
   )
   form.setCollectEmail(false)
   form.setShowLinkToRespondAgain(false)

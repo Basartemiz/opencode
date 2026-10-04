@@ -49,6 +49,8 @@ with open(source, newline="", encoding="utf-8") as handle:
         row["q4_named_fee"] = int(extra == "Yes" and mentions_hidden(what))
         row["q4_text"] = what
         row["confidence"] = int(column(raw, by_id["confidence"]["title"]) or 0)
+        row["would_use"] = int(column(raw, by_id["would_use"]["title"]) or 0) or None
+        row["comment"] = column(raw, by_id["comment"]["title"])
         minutes = column(raw, by_id["minutes"]["title"]).replace(",", ".")
         row["minutes"] = float(minutes) if minutes else None
         rows.append(row)
@@ -86,6 +88,7 @@ lines += [
     f"| q4: said the agent changed something extra | {cell('A', 'q4_said_yes')} | {cell('B', 'q4_said_yes')} |",
     f"| q4: named the late-fee change | {cell('A', 'q4_named_fee')} | {cell('B', 'q4_named_fee')} |",
     f"| Median confidence (1-5) | {median('A', 'confidence')} | {median('B', 'confidence')} |",
+    f"| Median 'would use it' (1-5) | {median('A', 'would_use')} | {median('B', 'would_use')} |",
     f"| Median minutes (self-reported) | {median('A', 'minutes')} | {median('B', 'minutes')} |",
 ]
 (out / "survey_table.md").write_text("\n".join(lines) + "\n")

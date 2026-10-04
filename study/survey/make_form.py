@@ -27,7 +27,7 @@ function createForm() {
   const form = FormApp.create("A short look at a coding agent's work (5 min)")
   form.setDescription(
     "You will open one web page that shows what an AI coding agent did for a task, then answer a few questions. " +
-    "There are no wrong people, only unclear pages: if you are unsure, say so. Takes about 5 minutes."
+    "We are testing the page, not you: if you are unsure, pick Not sure. Takes about 5 minutes. No names or emails are collected."
   )
   form.setCollectEmail(false)
   form.setShowLinkToRespondAgain(false)
@@ -66,7 +66,10 @@ function createForm() {
   Logger.log("Edit link:  " + form.getEditUrl())
   Logger.log("Responses:  " + sheet.getUrl())
 }
-""" % {"base": json.dumps(base), "questions": json.dumps(spec["questions"], indent=2, ensure_ascii=False)}
+""" % {"base": json.dumps(base), "questions": json.dumps(
+    # Only what the form needs; the answer key stays in questions.json.
+    [{k: v for k, v in q.items() if k in ("id", "title", "type", "options", "required", "low", "high", "low_label", "high_label")} for q in spec["questions"]],
+    indent=2, ensure_ascii=False)}
 
 (HERE / "create_form.gs").write_text(script)
 print(f"wrote {HERE / 'create_form.gs'}")

@@ -100,6 +100,7 @@ section.part { margin: 0 0 38px; }
   border: 2px solid var(--rule); background: var(--sheet); cursor: pointer; overflow: hidden;
 }
 .node .name { font: 700 0.86rem var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .folder { font: 0.68rem var(--mono); color: var(--ink); opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node .kind { font-size: 0.7rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node.user { background: var(--ink); color: var(--sheet); border-color: var(--ink); border-radius: 999px; cursor: default; }
 .node.user .kind { color: var(--sheet); opacity: 0.7; }
@@ -475,6 +476,11 @@ window.__STUDY_DATA__ = {"session": {"id": "ses_ef819dd33ffeePJlrMSeIWQlWr", "ti
       })
       return { number: index + 1, from: from.id, to: to.id, action: step.action, confirmed: step.confirmed }
     })
+    // Boxes that share a file name, such as routes/reports.js and services/reports.js, also show their folder.
+    const counts = nodes.reduce((all, node) => all.set(node.name, (all.get(node.name) || 0) + 1), new Map())
+    nodes.forEach((node) => {
+      if (node.kind !== "user" && counts.get(node.name) > 1) node.folder = String(node.id).split("/").at(-2) || "."
+    })
     const legend = el("div", "legend")
     legend.append(
       append(el("span"), legendLine(false), document.createTextNode("Solid: the code confirms it")),
@@ -520,7 +526,7 @@ window.__STUDY_DATA__ = {"session": {"id": "ses_ef819dd33ffeePJlrMSeIWQlWr", "ti
       const count = nodes.length
       const width = Math.max(116, Math.min(150, count > 1 ? (room - (count - 1) * 130) / count : 150))
       const gap = count > 1 ? Math.max(110, Math.min(220, (room - count * width) / (count - 1))) : 0
-      const height = 56
+      const height = nodes.some((node) => node.folder) ? 70 : 56
       const stage = el("div", "stage")
       const at = new Map(nodes.map((node, index) => [node.id, index]))
       const left = (index) => 24 + index * (width + gap)
@@ -598,9 +604,11 @@ window.__STUDY_DATA__ = {"session": {"id": "ses_ef819dd33ffeePJlrMSeIWQlWr", "ti
         box.style.width = width + "px"
         box.style.height = height + "px"
         const parts = node.parts || []
-        const word = { user: "starts it", missing: "missing file", context: "unchanged", affected: "may be affected" }[node.kind] || STATUS[node.kind]
+        const word = { user: "starts it", missing: "not in the project", context: "unchanged", affected: "may be affected" }[node.kind] || STATUS[node.kind]
         box.title = (node.kind === "missing" ? node.id + " (not in the project)" : node.file || "You") + (parts.length ? "\nChanged: " + parts.join(", ") : "")
-        append(box, el("span", "name", node.name), el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
+        append(box, el("span", "name", node.name))
+        if (node.folder) box.append(el("span", "folder", "in " + node.folder + "/"))
+        box.append(el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
         if (node.file) box.addEventListener("click", () => pick(node.file, true))
         return box
       })
