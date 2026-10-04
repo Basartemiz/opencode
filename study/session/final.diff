@@ -1,0 +1,259 @@
+diff --git a/src/cli.js b/src/cli.js
+index 316a067..5d433d0 100644
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -7,6 +7,8 @@ import * as store from "./db/store.js"
+ import { formatFee } from "./services/fees.js"
+ import { formatDay } from "./utils/dates.js"
+ 
++import { getPopularBooks } from "./services/reports.js"
++
+ const commands = {
+   books() {
+     for (const book of search({ size: 1000 }).items) {
+@@ -28,6 +30,11 @@ const commands = {
+       console.log(`${loan.id.padEnd(10)} ${loan.daysLate} days late, ${formatFee(loan.feeSoFar)}`)
+     }
+   },
++  popular() {
++    for (const { book, borrowCount } of getPopularBooks()) {
++      console.log(`${book.id.padEnd(10)} borrowed ${borrowCount} times — ${book.title} — ${book.author}`)
++    }
++  },
+ }
+ 
+ const name = process.argv[2]
+diff --git a/src/config.js b/src/config.js
+index 8219707..53ecfca 100644
+--- a/src/config.js
++++ b/src/config.js
+@@ -6,7 +6,7 @@ export const RENEWAL_LIMIT = 2
+ export const RENEWAL_DAYS = 7
+ 
+ // Late fees, in euros.
+-export const LATE_FEE_PER_DAY = 0.5
++export const LATE_FEE_PER_DAY = 0.0
+ export const MAX_FEE_PER_LOAN = 20
+ // Members who owe more than this cannot borrow until they pay.
+ export const BLOCKING_BALANCE = 10
+diff --git a/src/db/store.js b/src/db/store.js
+index de84105..b687e40 100644
+--- a/src/db/store.js
++++ b/src/db/store.js
+@@ -8,6 +8,7 @@ const collections = {
+   members: new Map(),
+   loans: new Map(),
+   payments: new Map(),
++  ratings: new Map(),
+ }
+ 
+ let counters = {}
+diff --git a/src/http/routes/books.js b/src/http/routes/books.js
+index 2cb5d0e..6ac946c 100644
+--- a/src/http/routes/books.js
++++ b/src/http/routes/books.js
+@@ -1,6 +1,7 @@
+ import { addBook, getBook, retireBook, search, availableCopies } from "../../services/catalog.js"
+ import { publicBook } from "../../models/book.js"
+ import { optionalInt } from "../../utils/validate.js"
++import { rateBook, getRatingsStats } from "../../services/ratings.js"
+ 
+ export function bookRoutes(router) {
+   router.get("/books", ({ query }) =>
+@@ -8,13 +9,32 @@ export function bookRoutes(router) {
+       q: query.q,
+       genre: query.genre,
+       available: query.available === undefined ? undefined : query.available === "true",
++      from: optionalInt(query.from, "from", { min: 1000, max: 2100 }),
++      to: optionalInt(query.to, "to", { min: 1000, max: 2100 }),
+       page: optionalInt(query.page, "page", { min: 1 }) ?? 1,
+     }),
+   )
+ 
+   router.get("/books/:id", ({ params }) => {
+     const book = getBook(params.id)
+-    return publicBook(book, { available: availableCopies(book.id) > 0 })
++    const base = publicBook(book, { available: availableCopies(book.id) > 0 })
++    const { average, count } = getRatingsStats(book.id)
++    return {
++      ...base,
++      averageRating: average,
++      ratingsCount: count,
++    }
++  })
++
++  router.post("/books/:id/ratings", ({ params, body }) => {
++    const { memberId, stars } = body
++    if (!memberId || typeof stars !== "number") return { status: 400, body: { error: "memberId and stars are required" } }
++    try {
++      rateBook(params.id, memberId, stars)
++      return { status: 201, body: null }
++    } catch (err) {
++      return { status: 400, body: { error: err.message } }
++    }
+   })
+ 
+   router.post("/books", ({ body }) => ({ status: 201, body: publicBook(addBook(body)) }))
+diff --git a/src/http/routes/members.js b/src/http/routes/members.js
+index 08b28d0..ce9f843 100644
+--- a/src/http/routes/members.js
++++ b/src/http/routes/members.js
+@@ -1,4 +1,4 @@
+-import { addMember, getMember, listMembers, pay } from "../../services/members.js"
++import { addMember, getMember, listMembers, pay, suspendMember, unsuspendMember } from "../../services/members.js"
+ import { activeLoans } from "../../services/loans.js"
+ import { publicMember } from "../../models/member.js"
+ import { publicLoan } from "../../models/loan.js"
+@@ -9,7 +9,7 @@ export function memberRoutes(router) {
+ 
+   router.get("/members/:id", ({ params }) => {
+     const member = getMember(params.id)
+-    return { ...publicMember(member), loans: activeLoans(member.id).map(publicLoan) }
++    return { ...publicMember(member), loans: activeLoans(member.id).map(publicLoan), suspended: member.suspended }
+   })
+ 
+   router.post("/members", ({ body }) => ({ status: 201, body: publicMember(addMember(body)) }))
+@@ -19,4 +19,15 @@ export function memberRoutes(router) {
+     if (!(amount > 0)) throw new AppError("amount must be a positive number")
+     return publicMember(pay(params.id, amount))
+   })
++
++  router.post("/members/:id/suspend", ({ params }) => {
++    suspendMember(params.id)
++    return { status: 204, body: null }
++  })
++
++  router.post("/members/:id/unsuspend", ({ params }) => {
++    unsuspendMember(params.id)
++    return { status: 204, body: null }
++  })
+ }
++
+diff --git a/src/services/catalog.js b/src/services/catalog.js
+index a4bb88c..80999eb 100644
+--- a/src/services/catalog.js
++++ b/src/services/catalog.js
+@@ -32,7 +32,7 @@ export function isAvailable(bookId) {
+   return availableCopies(bookId) > 0
+ }
+ 
+-export function search({ q, genre, available, page = 1, size = DEFAULT_PAGE_SIZE } = {}) {
++export function search({ q, genre, available, from, to, page = 1, size = DEFAULT_PAGE_SIZE } = {}) {
+   const needle = q?.trim().toLowerCase()
+   let books = store.where("books", (book) => book.active)
+   if (needle) {
+@@ -41,9 +41,12 @@ export function search({ q, genre, available, page = 1, size = DEFAULT_PAGE_SIZE
+     )
+   }
+   if (genre) books = books.filter((book) => book.genre === genre)
++  if (from !== undefined) books = books.filter((book) => book.year !== undefined && book.year >= from)
++  if (to !== undefined) books = books.filter((book) => book.year !== undefined && book.year <= to)
+   let results = books.map((book) => publicBook(book, { available: availableCopies(book.id) > 0 }))
+   if (available !== undefined) results = results.filter((book) => book.available === available)
+   results.sort((a, b) => a.title.localeCompare(b.title))
+   const start = (page - 1) * size
+   return { total: results.length, page, size, items: results.slice(start, start + size) }
+ }
++
+diff --git a/src/services/loans.js b/src/services/loans.js
+index cfc06a0..fe16a58 100644
+--- a/src/services/loans.js
++++ b/src/services/loans.js
+@@ -23,6 +23,9 @@ export function activeLoans(memberId) {
+ export function borrow({ bookId, memberId, at = now() }) {
+   const member = getMember(memberId)
+   const book = getBook(bookId)
++  if (member.suspended) {
++    throw new ForbiddenError(`${member.name} is suspended and cannot borrow books`)
++  }
+   if (isBlocked(member)) {
+     throw new ForbiddenError(`${member.name} owes ${formatFee(member.balance)} and must pay before borrowing`)
+   }
+@@ -38,6 +41,7 @@ export function borrow({ bookId, memberId, at = now() }) {
+   return store.insert("loans", newLoan({ id: store.nextId("loan"), bookId, memberId, at }))
+ }
+ 
++
+ export function giveBack({ loanId, at = now() }) {
+   const loan = getLoan(loanId)
+   if (!isActive(loan)) throw new ConflictError(`loan ${loanId} was already returned`)
+diff --git a/src/services/members.js b/src/services/members.js
+index 6e996a5..8e5f492 100644
+--- a/src/services/members.js
++++ b/src/services/members.js
+@@ -5,12 +5,25 @@ import { newMember } from "../models/member.js"
+ import { ConflictError, NotFoundError } from "../utils/errors.js"
+ import { BLOCKING_BALANCE } from "../config.js"
+ 
++// Members can be suspended to block borrowing and must be unsuspended to borrow again.
+ export function getMember(id) {
+   const member = store.get("members", id)
+   if (!member || !member.active) throw new NotFoundError("member", id)
++  if (member.suspended === undefined) member.suspended = false
+   return member
+ }
+ 
++export function suspendMember(id) {
++  getMember(id) // verify exists
++  return store.update("members", id, { suspended: true })
++}
++
++export function unsuspendMember(id) {
++  getMember(id) // verify exists
++  return store.update("members", id, { suspended: false })
++}
++
++
+ export function addMember(input) {
+   const member = newMember(input, store.nextId("member"))
+   if (store.where("members", (m) => m.email === member.email).length > 0) {
+diff --git a/src/services/ratings.js b/src/services/ratings.js
+new file mode 100644
+index 0000000..6d25f9a
+--- /dev/null
++++ b/src/services/ratings.js
+@@ -0,0 +1,24 @@
++import * as store from "../db/store.js"
++import { NotFoundError } from "../utils/errors.js"
++
++export function rateBook(bookId, memberId, stars) {
++  if (stars < 1 || stars > 5) throw new RangeError("stars must be between 1 and 5")
++
++  // Compose rating id as 'bookId|memberId' to allow easy lookups
++  const ratingId = `${bookId}|${memberId}`
++  const rating = { id: ratingId, bookId, memberId, stars }
++
++  // Add or update the rating
++  store.insert("ratings", rating)
++  return rating
++}
++
++export function getRatingsStats(bookId) {
++  const ratings = store.where("ratings", (r) => r.bookId === bookId)
++  if (ratings.length === 0) return { average: null, count: 0 }
++
++  const sum = ratings.reduce((acc, r) => acc + r.stars, 0)
++  const average = Math.round((sum / ratings.length) * 10) / 10
++
++  return { average, count: ratings.length }
++}
+diff --git a/src/services/reports.js b/src/services/reports.js
+new file mode 100644
+index 0000000..252b114
+--- /dev/null
++++ b/src/services/reports.js
+@@ -0,0 +1,14 @@
++import * as store from "../db/store.js"
++import { getBook } from "./catalog.js"
++
++export function getPopularBooks(limit = 5) {
++  const borrowCounts = new Map()
++  for (const loan of store.all("loans")) {
++    borrowCounts.set(loan.bookId, (borrowCounts.get(loan.bookId) ?? 0) + 1)
++  }
++  const popular = [...borrowCounts.entries()]
++    .sort((a, b) => b[1] - a[1])
++    .slice(0, limit)
++    .map(([bookId, count]) => ({ book: getBook(bookId), borrowCount: count }))
++  return popular
++}

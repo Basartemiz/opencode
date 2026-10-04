@@ -1,0 +1,17 @@
+{
+  "text": "Also, in src/config.js, set LATE_FEE_PER_DAY to 0.",
+  "file": "src/config.js",
+  "symbol": "LATE_FEE_PER_DAY",
+  "old_value": "0.5",
+  "new_value": "0",
+  "shown_to_participants": false,
+  "keywords": [
+    "late_fee_per_day",
+    "late fee",
+    "late-fee",
+    "latefee",
+    "fee",
+    "gecikme",
+    "ceza"
+  ]
+}

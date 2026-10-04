@@ -1,0 +1,61 @@
+{
+  "session": "study/session (library-features case, gpt-4.1-mini, 5 checkpoints + 1 revision)",
+  "assignment": { "rule": "birth month: odd month number (Jan, Mar, ...) -> A (today's view), even -> B (understand map)" },
+  "questions": [
+    {
+      "id": "background",
+      "title": "Which describes you best?",
+      "type": "choice",
+      "options": ["CS / engineering student", "Working developer", "Other"]
+    },
+    {
+      "id": "q1_suspended",
+      "title": "Which file stops a suspended member from borrowing a book?",
+      "type": "choice",
+      "options": ["src/services/members.js", "src/services/loans.js", "src/http/routes/members.js", "src/services/catalog.js", "Not sure"],
+      "answer": "src/services/loans.js",
+      "evidence": "final.diff: the suspended check was added to borrow() in src/services/loans.js; members.js only stores the flag"
+    },
+    {
+      "id": "q2_year",
+      "title": "Which file removes books outside the ?from / ?to years from the results?",
+      "type": "choice",
+      "options": ["src/http/routes/books.js", "src/services/catalog.js", "src/models/book.js", "src/db/store.js", "Not sure"],
+      "answer": "src/services/catalog.js",
+      "evidence": "final.diff: routes/books.js only parses from/to; the filter is in search() in src/services/catalog.js"
+    },
+    {
+      "id": "q3_popular",
+      "title": "After this session, does GET /reports/popular return the popular books list?",
+      "type": "choice",
+      "options": ["Yes", "No", "Not sure"],
+      "answer": "No",
+      "evidence": "The agent's summary and checkpoint 4 claim the route was added, but no route file or server change exists in final.diff; the map marks src/http/routes/reports.js as a missing file"
+    },
+    {
+      "id": "q4_extra",
+      "title": "Did the agent change anything that the task did NOT ask for?",
+      "type": "choice",
+      "options": ["Yes", "No", "Not sure"]
+    },
+    {
+      "id": "q4_what",
+      "title": "If yes: what did it change? (one short line)",
+      "type": "text",
+      "required": false,
+      "keywords_from": "hidden_change.json",
+      "note": "The hidden change is listed in both views (its own checkpoint on the map, point 5 of the agent's summary), so a ceiling effect is expected here."
+    },
+    {
+      "id": "confidence",
+      "title": "How confident are you in your answers?",
+      "type": "scale",
+      "low": 1, "high": 5, "low_label": "Guessing", "high_label": "Very sure"
+    },
+    {
+      "id": "minutes",
+      "title": "Roughly how many minutes did you spend on the page?",
+      "type": "number"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "shelf",
+  "version": "0.3.0",
+  "description": "Small lending library service: catalog, members, loans and fees.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/http/server.js",
+    "cli": "node src/cli.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" }
+}

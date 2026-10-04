@@ -1,0 +1,11 @@
+ src/cli.js                 |  7 +++++++
+ src/config.js              |  2 +-
+ src/db/store.js            |  1 +
+ src/http/routes/books.js   | 22 +++++++++++++++++++++-
+ src/http/routes/members.js | 15 +++++++++++++--
+ src/services/catalog.js    |  5 ++++-
+ src/services/loans.js      |  4 ++++
+ src/services/members.js    | 13 +++++++++++++
+ src/services/ratings.js    | 24 ++++++++++++++++++++++++
+ src/services/reports.js    | 14 ++++++++++++++
+ 10 files changed, 102 insertions(+), 5 deletions(-)
