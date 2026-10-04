@@ -119,7 +119,7 @@ it.instance("understand agent edits files and pauses at checkpoints", () =>
     expect(evalPerm(understand, "edit")).toBe("allow")
     expect(evalPerm(understand, "checkpoint")).toBe("allow")
     expect(evalPerm(understand, "question")).toBe("allow")
-    expect(understand?.checkpoint).toEqual({ edits: 5, lines: 100 })
+    expect(understand?.checkpoint).toEqual({ files: 6, lines: 400 })
     // Agent options are sent to the model provider, so the limits must not live there.
     expect(understand?.options).toEqual({})
   }),
@@ -146,14 +146,14 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const understand = yield* load((svc) => svc.get("understand"))
-      expect(understand?.checkpoint).toEqual({ edits: 3, lines: 100 })
+      expect(understand?.checkpoint).toEqual({ files: 3, lines: 400 })
       expect(understand?.options).toEqual({})
     }),
   {
     config: {
       agent: {
         understand: {
-          checkpoint: { edits: 3 },
+          checkpoint: { files: 3 },
         },
       },
     },

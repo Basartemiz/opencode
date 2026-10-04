@@ -3,6 +3,7 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { PlanExitTool } from "./plan"
 import { CheckpointTool } from "./checkpoint"
+import { CheckpointMap } from "../checkpoint/map"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -444,6 +445,7 @@ export const node = LayerNode.make({
     Provider.node,
     LSP.node,
     Snapshot.node,
+    CheckpointMap.node,
     Instruction.node,
     FSUtil.node,
     EventV2Bridge.node,

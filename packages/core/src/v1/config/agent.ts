@@ -37,12 +37,12 @@ const AgentSchema = Schema.StructWithRest(
     maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
     checkpoint: Schema.optional(
       Schema.Struct({
-        edits: Schema.optional(PositiveInt),
+        files: Schema.optional(PositiveInt),
         lines: Schema.optional(PositiveInt),
       }),
     ).annotate({
       description:
-        "Block further edits until the agent calls the checkpoint tool after this many edits or changed lines (used by the understand agent)",
+        "Block further edits until the agent calls the checkpoint tool after it changed this many files or lines (used by the understand agent)",
     }),
     permission: Schema.optional(ConfigPermissionV1.Info),
   }),

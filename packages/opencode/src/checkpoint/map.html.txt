@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Understand map</title>
+<style>
+:root {
+  --bg: #f6f4ee;
+  --sheet: #ffffff;
+  --ink: #1b1b19;
+  --muted: #67655d;
+  --rule: #e3e0d6;
+  --soft: #efede5;
+  --add: #187a35;
+  --add-bg: #e5f4e8;
+  --del: #b42318;
+  --del-bg: #fdebe9;
+  --mod: #175cd3;
+  --mod-bg: #e9f1fe;
+  --claim: #6941c6;
+  --claim-bg: #f3effc;
+  --wait: #b54708;
+  --wait-bg: #fef3e4;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151513;
+    --sheet: #1e1e1b;
+    --ink: #edece7;
+    --muted: #a3a199;
+    --rule: #34332e;
+    --soft: #262622;
+    --add: #4cc26c;
+    --add-bg: #12301b;
+    --del: #f97066;
+    --del-bg: #3a1714;
+    --mod: #84adff;
+    --mod-bg: #172338;
+    --claim: #b692f6;
+    --claim-bg: #261d3b;
+    --wait: #fdb022;
+    --wait-bg: #3a2a0d;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 var(--sans); }
+button { font: inherit; color: inherit; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+.top {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+  padding: 10px 20px; background: var(--sheet); border-bottom: 1px solid var(--rule);
+}
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1 1 260px; }
+.brand strong { white-space: nowrap; }
+.brand span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.85rem; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--add); box-shadow: 0 0 0 3px var(--add-bg); }
+.dot.off { background: var(--del); box-shadow: 0 0 0 3px var(--del-bg); }
+.button { border: 1px solid var(--rule); border-radius: 8px; padding: 6px 12px; background: var(--soft); color: var(--ink); text-decoration: none; font-size: 0.85rem; white-space: nowrap; cursor: pointer; display: inline-block; }
+.button:hover { border-color: var(--muted); }
+.page { max-width: 1120px; margin: 0 auto; padding: 18px 20px 80px; }
+@media (max-width: 700px) { .page { padding: 12px 14px 60px; } }
+.working { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--mod-bg); color: var(--mod); font-size: 0.92rem; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 22px; }
+.pill { border: 1px solid var(--rule); background: var(--sheet); border-radius: 999px; padding: 5px 12px; font-size: 0.85rem; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; max-width: 100%; }
+.pill span:not(.state) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 26ch; }
+.pill.selected { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.pill .state { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.pill.waiting .state { color: var(--wait); font-weight: 600; }
+.empty { color: var(--muted); text-align: center; padding: 60px 0; }
+.hero { margin: 0 0 30px; }
+.eyebrow { font-size: 0.75rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.hero h1 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); line-height: 1.15; margin: 6px 0 10px; letter-spacing: -0.01em; }
+.lead { font-size: 1.12rem; margin: 0; max-width: 62ch; }
+.status { display: inline-block; margin-left: 8px; border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: none; border: 1px solid currentColor; }
+.status.approve, .status.auto { color: var(--add); }
+.status.revise, .status.waiting { color: var(--wait); }
+.status.stop { color: var(--del); }
+section.part { margin: 0 0 38px; }
+.part > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 14px; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+.part > header h2 { font-size: 1.25rem; margin: 0; }
+.tag { font-size: 0.7rem; font-weight: 700; border-radius: 6px; padding: 2px 8px; white-space: nowrap; letter-spacing: 0; text-transform: none; }
+.tag.claim { color: var(--claim); background: var(--claim-bg); }
+.tag.fact { color: var(--mod); background: var(--mod-bg); }
+.prose { max-width: 70ch; margin: 0; font-size: 1.04rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.8rem; color: var(--muted); margin: 0 0 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { width: 30px; height: 10px; }
+.machine { background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; overflow-x: auto; }
+.stage { position: relative; }
+.stage svg { position: absolute; left: 0; top: 0; overflow: visible; color: var(--ink); pointer-events: none; }
+.stage path.edge { fill: none; stroke: currentColor; stroke-width: 1.7; }
+.stage path.edge.unchecked { stroke: var(--wait); stroke-dasharray: 6 5; }
+.node {
+  position: absolute; display: grid; gap: 1px; align-content: center; text-align: center; padding: 6px 10px; border-radius: 12px;
+  border: 2px solid var(--rule); background: var(--sheet); cursor: pointer; overflow: hidden;
+}
+.node .name { font: 700 0.86rem var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .kind { font-size: 0.7rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node.user { background: var(--ink); color: var(--sheet); border-color: var(--ink); border-radius: 999px; cursor: default; }
+.node.user .kind { color: var(--sheet); opacity: 0.7; }
+.node.added { border-color: var(--add); background: var(--add-bg); }
+.node.modified { border-color: var(--mod); background: var(--mod-bg); }
+.node.deleted { border-color: var(--del); background: var(--del-bg); }
+.node.context { border-style: dashed; }
+.node.missing { border-style: dashed; border-color: var(--del); }
+.label {
+  position: absolute; display: flex; gap: 6px; align-items: flex-start; font-size: 0.82rem; line-height: 1.35; background: var(--sheet);
+  padding: 2px 6px; border-radius: 6px; box-shadow: 0 0 0 1px var(--rule);
+}
+.label b { flex: none; min-width: 18px; height: 18px; border-radius: 9px; display: inline-grid; place-items: center; background: var(--claim); color: #fff; font-size: 0.7rem; }
+.label.unchecked { box-shadow: 0 0 0 1px var(--wait); }
+.hint { margin: 6px 0 0; font-size: 0.82rem; }
+.explain { margin: 0 0 12px; font-size: 0.85rem; max-width: 90ch; }
+.sequence { margin: 12px 0 0; padding-left: 1.4em; color: var(--muted); font-size: 0.88rem; max-width: 80ch; }
+.sequence li { margin: 2px 0; }
+.sequence .warn-mark { color: var(--wait); font-weight: 600; }
+.project { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; }
+@media (max-width: 760px) { .project { grid-template-columns: minmax(0, 1fr); } .tree { border-right: 0; border-bottom: 1px solid var(--rule); } }
+.tree { border-right: 1px solid var(--rule); padding: 10px 8px 12px; max-height: 640px; overflow: auto; }
+.tree-tools { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: var(--muted); padding: 0 6px 8px; }
+.row { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 3px 6px; cursor: pointer; min-width: 0; }
+.row:hover { background: var(--soft); }
+.row.selected { background: var(--mod-bg); box-shadow: inset 0 0 0 1px var(--mod); }
+.row .caret { width: 12px; flex: none; color: var(--muted); font-size: 0.7rem; }
+.row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 0.86rem var(--mono); }
+.row.folder .name { font-weight: 700; }
+.row.plain .name { color: var(--muted); }
+.row .count { margin-left: auto; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.badge { flex: none; font: 700 0.66rem var(--sans); border-radius: 4px; padding: 1px 5px; text-transform: uppercase; letter-spacing: 0.03em; }
+.badge.added { color: var(--add); background: var(--add-bg); }
+.badge.modified { color: var(--mod); background: var(--mod-bg); }
+.badge.deleted { color: var(--del); background: var(--del-bg); }
+.children { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--rule); }
+.details { padding: 16px 18px; display: grid; gap: 12px; align-content: start; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.details h3.path { margin: 0; font: 700 1rem var(--mono); overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field h4 { margin: 0 0 3px; font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.field p { margin: 0; }
+.relations { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--muted); }
+.relations span { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.counts { font: 0.82rem var(--mono); }
+.a { color: var(--add); }
+.d { color: var(--del); }
+.lines { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; }
+.lines table { border-collapse: collapse; font: 0.8rem/1.5 var(--mono); min-width: 100%; }
+.lines td { padding: 0 8px; white-space: pre; vertical-align: top; }
+.lines td.n, .lines td.s { color: var(--muted); text-align: right; user-select: none; width: 1%; }
+.lines td.t { width: 100%; }
+.lines tr.add { background: var(--add-bg); }
+.lines tr.del { background: var(--del-bg); }
+.lines tr.gap td { color: var(--muted); background: var(--soft); }
+.toggle { background: none; border: 0; padding: 0; color: var(--mod); cursor: pointer; text-decoration: underline; font-size: 0.85rem; justify-self: start; }
+.warn { margin-top: 14px; background: var(--wait-bg); border: 1px solid var(--wait); border-radius: 10px; padding: 10px 14px; font-size: 0.92rem; }
+.warn ul { margin: 4px 0 0; padding-left: 1.2em; }
+.try { background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--add); border-radius: 10px; padding: 12px 16px; max-width: 760px; }
+.try p { margin: 0; }
+.steps { margin: 0; padding-left: 1.3em; max-width: 760px; }
+.steps li { margin: 3px 0; }
+.decision { margin-top: 12px; padding: 10px 14px; border-radius: 10px; background: var(--soft); max-width: 760px; }
+.figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.figure { background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px; display: grid; gap: 2px; }
+.figure strong { font-size: 1.5rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.figure span { color: var(--muted); font-size: 0.85rem; }
+.muted { color: var(--muted); }
+.badge.affected { color: var(--wait); background: var(--wait-bg); }
+.node.affected { border-style: dashed; border-color: var(--wait); background: var(--wait-bg); }
+.row.symbol { padding-top: 1px; padding-bottom: 1px; }
+.row.symbol .name { font-size: 0.8rem; }
+.change { flex: none; margin-left: auto; font-size: 0.7rem; font-weight: 700; }
+.change.added { color: var(--add); }
+.change.changed { color: var(--mod); }
+.change.removed { color: var(--del); }
+.more { margin: 0 0 4px 8px; font-size: 0.75rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; gap: 7px; align-items: baseline; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 10px; background: var(--soft); cursor: pointer; font: 0.8rem var(--mono); max-width: 100%; }
+.chip:hover { border-color: var(--muted); }
+.chip .change { margin-left: 0; font-family: var(--sans); }
+.lines tr.where td { background: var(--soft); color: var(--muted); font: 0.78rem var(--sans); padding-top: 3px; padding-bottom: 3px; white-space: normal; }
+.lines tr.where.mark td { background: var(--mod-bg); color: var(--mod); font-weight: 700; }
+.risk { background: var(--wait-bg); border: 1px solid var(--wait); border-radius: 10px; padding: 10px 14px; display: grid; gap: 8px; min-width: 0; }
+.risk p { margin: 0; }
+.risks { margin: 0; padding-left: 1.2em; max-width: 90ch; display: grid; gap: 4px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><strong>Understand map</strong><span id="session"></span></div>
+  <div class="live"><span class="dot" id="dot"></span><span id="status">Connecting…</span></div>
+  <a id="download" class="button" download>Download study data (JSON)</a>
+</header>
+<main class="page" id="page"><p class="empty">Loading…</p></main>
+<script>
+(() => {
+  "use strict"
+  const base = location.pathname.replace(/\/$/, "")
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined }
+  // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
+  let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
+  const DECISIONS = {
+    approve: "Approved",
+    revise: "Revision asked",
+    stop: "Stopped",
+    auto: "Approved automatically",
+    waiting: "Waiting for your answer in the terminal",
+  }
+  const STATUS = { added: "new", modified: "changed", deleted: "deleted" }
+  const CHANGES = { added: "new", changed: "changed", removed: "removed" }
+  // The project tree lists at most this many of a file's changed functions; the file's details list all of them.
+  const MAX_SYMBOLS = 8
+  const KEY_LINES = 8
+  const SVG = "http://www.w3.org/2000/svg"
+  document.getElementById("download").href = base + "/stats"
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag)
+    if (className) node.className = className
+    if (text !== undefined) node.textContent = text
+    return node
+  }
+
+  function svg(tag, attributes) {
+    const node = document.createElementNS(SVG, tag)
+    Object.entries(attributes || {}).forEach((pair) => node.setAttribute(pair[0], pair[1]))
+    return node
+  }
+
+  function append(parent, ...children) {
+    children.filter(Boolean).forEach((child) => parent.append(child))
+    return parent
+  }
+
+  // Agent text may mark code with backticks; everything is inserted as text, never as HTML.
+  function inline(parent, text) {
+    String(text || "")
+      .split(/(`[^`]+`)/)
+      .forEach((piece) => {
+        if (piece.length > 2 && piece.startsWith("`") && piece.endsWith("`")) parent.append(el("code", "", piece.slice(1, -1)))
+        else if (piece) parent.append(document.createTextNode(piece.replace(/\*\*/g, "")))
+      })
+    return parent
+  }
+
+  function plural(count, word) {
+    return count + " " + word + (count === 1 ? "" : "s")
+  }
+
+  function duration(ms) {
+    const seconds = Math.round((ms || 0) / 1000)
+    if (seconds < 60) return seconds + " s"
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return minutes + " min " + (seconds % 60) + " s"
+    return Math.floor(minutes / 60) + " h " + (minutes % 60) + " min"
+  }
+
+  function key(entry) {
+    return entry.number + "." + entry.revision
+  }
+
+  function label(entry) {
+    return "Checkpoint " + entry.number + (entry.revision > 1 ? ", revision " + entry.revision : "")
+  }
+
+  function short(entry) {
+    return entry.revision > 1 ? entry.number + "r" + entry.revision : String(entry.number)
+  }
+
+  function status(entry) {
+    return entry.status === "waiting" ? "waiting" : entry.decision
+  }
+
+  function counts(additions, deletions) {
+    return append(el("span", "counts"), el("span", "a", "+" + additions), document.createTextNode(" "), el("span", "d", "−" + deletions))
+  }
+
+  function tag(kind, text) {
+    return el("span", "tag " + kind, text || (kind === "claim" ? "the agent's words · not verified" : "computed from the code"))
+  }
+
+  function part(title, ...tags) {
+    const section = el("section", "part")
+    section.append(append(el("header"), el("h2", "", title), ...tags))
+    return section
+  }
+
+  // Agents write paths in different ways, such as "./src/a.ts" or just "a.ts".
+  function same(a, b) {
+    const clean = (value) => String(value).trim().replace(/\\/g, "/").replace(/^\.\//, "")
+    const left = clean(a)
+    const right = clean(b)
+    return left === right || left.endsWith("/" + right) || right.endsWith("/" + left)
+  }
+
+  function sentence(items) {
+    return items.length > 1 ? items.slice(0, -1).join(", ") + " and " + items.at(-1) : items.join("")
+  }
+
+  // A function as "total()", a method as "Cart.total()", and a class or type with its kind.
+  function named(symbol) {
+    if (symbol.kind === "method") return (symbol.parent ? symbol.parent + "." : "") + symbol.name + "()"
+    if (symbol.kind === "function") return symbol.name + "()"
+    if (symbol.kind === "class" || symbol.kind === "type") return symbol.kind + " " + symbol.name
+    return symbol.name
+  }
+
+  // The changed or removed functions an affected file mentions, with how each one changed.
+  function mentioned(entry, item) {
+    return item.names.map((name) => {
+      const found = entry.files
+        .filter((file) => item.uses.includes(file.file))
+        .flatMap((file) => file.symbols || [])
+        .find((symbol) => symbol.name === name && symbol.change !== "added")
+      return found ? named(found) + " (" + CHANGES[found.change] + ")" : name
+    })
+  }
+
+  // Opens a file's full diff at the blocks where one of its functions changed.
+  function focus(id, file, index) {
+    state.open.add(id)
+    state.mark = { id, index }
+    pick(file)
+    requestAnimationFrame(() => {
+      const target = document.querySelector("tr.where.mark")
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "center" })
+    })
+  }
+
+  function choose(next) {
+    const list = state.data.checkpoints
+    state.selected = next
+    state.follow = next === key(list.at(-1))
+    history.replaceState(null, "", "#" + next)
+    render()
+  }
+
+  // Shows a file in the project tree and its details, opening the folders on the way.
+  function pick(file, scroll) {
+    state.file = file
+    file
+      .split("/")
+      .slice(0, -1)
+      .forEach((_, index, parts) => state.folders.set(parts.slice(0, index + 1).join("/") + "/", true))
+    render()
+    if (scroll) document.getElementById("project")?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
+  function render() {
+    const data = state.data
+    const page = document.getElementById("page")
+    const y = window.scrollY
+    document.title = "Understand map · " + data.session.title
+    document.getElementById("session").textContent = data.session.title
+    const list = data.checkpoints
+    if (wanted && list.some((entry) => key(entry) === wanted)) {
+      state.selected = wanted
+      state.follow = wanted === key(list.at(-1))
+      wanted = undefined
+    }
+    if (state.follow || !list.some((entry) => key(entry) === state.selected))
+      state.selected = list.length ? key(list.at(-1)) : undefined
+    page.replaceChildren()
+    if (data.unreviewed.length) {
+      page.append(
+        el(
+          "p",
+          "working",
+          "The agent is working: " +
+            plural(data.unreviewed.length, "file") +
+            " changed since the last checkpoint (" +
+            data.unreviewed.map((file) => file.file).join(", ") +
+            "). It explains them at its next checkpoint.",
+        ),
+      )
+    }
+    const entry = list.find((item) => key(item) === state.selected)
+    if (!entry) {
+      page.append(el("p", "empty", "No checkpoint yet. The map fills in when the agent finishes its first feature."))
+      return
+    }
+    if (!state.file || !known(state.file, list)) state.file = entry.files[0] && entry.files[0].file
+    page.append(pills(list), hero(entry))
+    if (entry.overview) {
+      const big = part("The big picture", tag("claim"))
+      big.append(inline(el("p", "prose"), entry.overview))
+      page.append(big)
+    }
+    append(page, machine(entry, data.project), risks(entry), project(entry, list, data.project))
+    if (entry.check) {
+      const tryIt = part("How to try it", tag("claim"))
+      tryIt.append(append(el("div", "try"), inline(el("p"), entry.check)))
+      page.append(tryIt)
+    }
+    page.append(did(entry), session(data.stats, list))
+    requestAnimationFrame(() => {
+      layout()
+      window.scrollTo(0, y)
+    })
+  }
+
+  function known(file, list) {
+    return list.some((entry) => entry.files.some((item) => item.file === file)) || state.data.project.includes(file)
+  }
+
+  function pills(list) {
+    const row = el("nav", "pills")
+    row.setAttribute("aria-label", "Checkpoints")
+    list.forEach((entry) => {
+      const pill = el("button", "pill" + (key(entry) === state.selected ? " selected" : "") + (entry.status === "waiting" ? " waiting" : ""))
+      append(pill, el("b", "", short(entry)), el("span", "", entry.title), el("span", "state", DECISIONS[status(entry)]))
+      pill.addEventListener("click", () => choose(key(entry)))
+      row.append(pill)
+    })
+    return row
+  }
+
+  function hero(entry) {
+    const eyebrow = append(el("div", "eyebrow", label(entry)), el("span", "status " + status(entry), DECISIONS[status(entry)]))
+    return append(el("div", "hero"), eyebrow, el("h1", "", entry.title), inline(el("p", "lead"), entry.impact))
+  }
+
+  // The agent's state machine: each file the program passes through is a box, and each step is a numbered arrow.
+  function machine(entry, files) {
+    const section = part("How it works", tag("claim"), tag("fact", "arrows checked against the code"))
+    const flow = entry.flow || []
+    if (!flow.length) {
+      section.append(el("p", "muted", "The agent did not describe how the program moves through this change."))
+      return section
+    }
+    const resolve = (name) => {
+      if (/^(user|you)$/i.test(String(name).trim())) return { id: "user", name: "You", kind: "user" }
+      const changed = entry.files.find((file) => same(file.file, name))
+      if (changed)
+        return { id: changed.file, name: changed.file.split("/").at(-1), kind: changed.status, file: changed.file, parts: (changed.symbols || []).map(named) }
+      const existing = files.find((file) => same(file, name))
+      const risky = (entry.affected || []).some((item) => item.file === existing)
+      if (existing) return { id: existing, name: existing.split("/").at(-1), kind: risky ? "affected" : "context", file: existing }
+      return { id: String(name), name: String(name).split("/").at(-1), kind: "missing" }
+    }
+    const nodes = []
+    const steps = flow.map((step, index) => {
+      const from = resolve(step.from)
+      const to = resolve(step.to)
+      ;[from, to].forEach((node) => {
+        if (!nodes.some((item) => item.id === node.id)) nodes.push(node)
+      })
+      return { number: index + 1, from: from.id, to: to.id, action: step.action, confirmed: step.confirmed }
+    })
+    const legend = el("div", "legend")
+    legend.append(
+      append(el("span"), legendLine(false), document.createTextNode("Solid: the code confirms it")),
+      append(el("span"), legendLine(true), document.createTextNode("Dashed: the code does not confirm it")),
+    )
+    const why = inline(
+      el("p", "muted explain"),
+      "To check an arrow, OpenCode reads the import lines of both files, such as `import { total } from \"./cart.js\"`, which shows that one file uses the other. " +
+        "A dashed arrow means neither file imports the other: the agent says they work together, but the code shows no direct link. " +
+        "It can still be right, for example when files talk through a web request or an event, so check that step. " +
+        "Arrows from or to you, and arrows inside one file, have nothing to check.",
+    )
+    const area = el("div", "machine")
+    area.dataset.nodes = JSON.stringify(nodes)
+    area.dataset.steps = JSON.stringify(steps)
+    const list = el("ol", "sequence")
+    steps.forEach((step) => {
+      const item = el("li")
+      const name = (id) => nodes.find((node) => node.id === id).name
+      item.append(document.createTextNode(name(step.from) + " → " + name(step.to) + ": "), inline(el("span"), step.action))
+      if (step.confirmed === false) item.append(el("span", "warn-mark", "  (not confirmed: neither file imports the other)"))
+      list.append(item)
+    })
+    const hint = el("p", "muted hint", "Scroll sideways to see the whole diagram.")
+    hint.hidden = true
+    section.append(legend, why, area, hint, list)
+    return section
+  }
+
+  function legendLine(dashed) {
+    const line = svg("svg", { viewBox: "0 0 30 10" })
+    line.append(svg("line", { x1: "0", y1: "5", x2: "30", y2: "5", stroke: dashed ? "var(--wait)" : "currentColor", "stroke-width": "2", "stroke-dasharray": dashed ? "5 4" : "" }))
+    return line
+  }
+
+  // Lays out the state machine once the page has its width: boxes in a row, arrows between them, labels on the arrows.
+  function layout() {
+    document.querySelectorAll(".machine").forEach((area) => {
+      const nodes = JSON.parse(area.dataset.nodes)
+      const steps = JSON.parse(area.dataset.steps)
+      // Boxes and gaps shrink to fit the page; when even the smallest sizes are too wide, the diagram scrolls sideways.
+      const room = area.clientWidth - 48
+      const count = nodes.length
+      const width = Math.max(116, Math.min(150, count > 1 ? (room - (count - 1) * 130) / count : 150))
+      const gap = count > 1 ? Math.max(110, Math.min(220, (room - count * width) / (count - 1))) : 0
+      const height = 56
+      const stage = el("div", "stage")
+      const at = new Map(nodes.map((node, index) => [node.id, index]))
+      const left = (index) => 24 + index * (width + gap)
+      const row = 0
+      const drawing = svg("svg")
+      const marker = svg("marker", { id: "tip", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" })
+      marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "currentColor" }))
+      const defs = svg("defs")
+      defs.append(marker)
+      drawing.append(defs)
+      const labels = []
+      const above = []
+      const below = []
+      const used = new Map()
+      steps.forEach((step) => {
+        const a = at.get(step.from)
+        const b = at.get(step.to)
+        const pair = a + ">" + b
+        const repeat = used.get(pair) || 0
+        used.set(pair, repeat + 1)
+        const unchecked = step.confirmed === false
+        let d
+        let point
+        let place
+        // A label between two neighboring boxes must fit in the gap between them; labels over arcs can be wider.
+        let room = 180
+        if (b === a + 1 && repeat === 0) {
+          room = gap - 12
+          const y = row + height / 2
+          d = `M${left(a) + width},${y} L${left(b)},${y}`
+          point = { x: left(a) + width + gap / 2, y: y - 8 }
+          place = "above"
+        } else if (a === b) {
+          const level = above.filter((span) => span[0] <= a && span[1] >= a).length
+          above.push([a, a])
+          const x = left(a) + width / 2
+          const lift = 46 + level * 58
+          d = `M${x - 24},${row} C${x - 40},${row - lift} ${x + 40},${row - lift} ${x + 24},${row}`
+          point = { x, y: row - lift * 0.75 - 6 }
+          place = "above"
+        } else if (b > a) {
+          const level = above.filter((span) => span[0] < b && span[1] > a).length
+          above.push([a, b])
+          const lift = 60 + level * 58
+          const x1 = left(a) + width * 0.7
+          const x2 = left(b) + width * 0.3
+          d = `M${x1},${row} C${x1},${row - lift} ${x2},${row - lift} ${x2},${row}`
+          point = { x: (x1 + x2) / 2, y: row - lift * 0.75 - 6 }
+          place = "above"
+        } else {
+          const level = below.filter((span) => span[0] < a && span[1] > b).length
+          below.push([b, a])
+          const drop = 60 + level * 58
+          const x1 = left(a) + width * 0.3
+          const x2 = left(b) + width * 0.7
+          d = `M${x1},${row + height} C${x1},${row + height + drop} ${x2},${row + height + drop} ${x2},${row + height}`
+          point = { x: (x1 + x2) / 2, y: row + height + drop * 0.75 + 6 }
+          place = "below"
+        }
+        drawing.append(svg("path", { d, class: "edge" + (unchecked ? " unchecked" : ""), "marker-end": "url(#tip)" }))
+        const tagLabel = el("div", "label" + (unchecked ? " unchecked" : ""))
+        if (unchecked) tagLabel.title = "Not confirmed by the code: neither file imports the other"
+        append(tagLabel, el("b", "", String(step.number)), inline(el("span"), step.action))
+        tagLabel.style.maxWidth = room + "px"
+        tagLabel.style.left = point.x + "px"
+        tagLabel.style.top = point.y + "px"
+        tagLabel.style.transform = place === "above" ? "translate(-50%, -100%)" : "translate(-50%, 0)"
+        tagLabel.dataset.place = place
+        labels.push(tagLabel)
+      })
+      const boxes = nodes.map((node, index) => {
+        const box = el("button", "node " + node.kind)
+        box.style.left = left(index) + "px"
+        box.style.top = row + "px"
+        box.style.width = width + "px"
+        box.style.height = height + "px"
+        const parts = node.parts || []
+        const word = { user: "starts it", missing: "missing file", context: "unchanged", affected: "may be affected" }[node.kind] || STATUS[node.kind]
+        box.title = (node.kind === "missing" ? node.id + " (not in the project)" : node.file || "You") + (parts.length ? "\nChanged: " + parts.join(", ") : "")
+        append(box, el("span", "name", node.name), el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
+        if (node.file) box.addEventListener("click", () => pick(node.file, true))
+        return box
+      })
+      append(stage, drawing, ...boxes, ...labels)
+      area.replaceChildren(stage)
+      // Labels that would cover an earlier label move up (or down, under the boxes) until they are clear.
+      const overlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+      labels.forEach((label, index) => {
+        const below = label.dataset.place === "below"
+        Array.from({ length: 12 }).some(() => {
+          const rect = label.getBoundingClientRect()
+          const hit = labels.slice(0, index).map((other) => other.getBoundingClientRect()).find((other) => overlap(rect, other))
+          if (!hit) return true
+          const shift = below ? hit.bottom - rect.top + 4 : rect.bottom - hit.top + 4
+          label.style.top = parseFloat(label.style.top) + (below ? shift : -shift) + "px"
+          return false
+        })
+      })
+      // Measure the labels, then move everything down so the arrows above the boxes fit.
+      const frame = stage.getBoundingClientRect()
+      const extents = [...labels, ...boxes].map((node) => node.getBoundingClientRect())
+      const top = Math.min(0, ...extents.map((rect) => rect.top - frame.top)) - 16
+      const bottom = Math.max(height, ...extents.map((rect) => rect.bottom - frame.top)) + 16
+      const right = Math.max(...extents.map((rect) => rect.right - frame.left)) + 24
+      ;[...boxes, ...labels].forEach((node) => (node.style.top = parseFloat(node.style.top) - top + "px"))
+      drawing.setAttribute("width", String(right))
+      drawing.setAttribute("height", String(bottom - top))
+      drawing.querySelectorAll("path.edge").forEach((path) => path.setAttribute("transform", "translate(0," + -top + ")"))
+      stage.style.width = right + "px"
+      stage.style.height = bottom - top + "px"
+      const hint = area.nextElementSibling
+      if (hint && hint.classList.contains("hint")) hint.hidden = right <= area.clientWidth + 1
+    })
+  }
+
+  // Files the checkpoint did not change that import a changed file: if the change broke what they rely on, they break too.
+  function risks(entry) {
+    const list = entry.affected || []
+    if (!list.length) return undefined
+    const section = part("May be affected", tag("fact", "found from the import lines"))
+    section.append(
+      el("p", "muted explain", "These files were not changed in this checkpoint, but they import a file that was. If the change broke something they rely on, they break too, so check them."),
+      append(
+        el("ul", "risks"),
+        ...list.map((item) => {
+          const link = el("button", "toggle", item.file)
+          link.addEventListener("click", () => pick(item.file, true))
+          return append(el("li"), link, document.createTextNode(item.names.length ? " uses " + sentence(mentioned(entry, item)) : " imports " + sentence(item.uses)))
+        }),
+      ),
+    )
+    return section
+  }
+
+  // The whole project as a tree, with the files this session changed marked. Clicking a file shows what changed and why.
+  function project(entry, list, files) {
+    const section = part("The project", tag("fact", "files and changes computed from the code"))
+    section.id = "project"
+    const changes = new Map()
+    list.forEach((item) =>
+      item.files.forEach((file) => {
+        const seen = changes.get(file.file) || { touched: [] }
+        seen.touched.push(item)
+        seen.status = file.status
+        changes.set(file.file, seen)
+      }),
+    )
+    const risky = new Map((entry.affected || []).map((item) => [item.file, item]))
+    const all = [...new Set([...files, ...changes.keys(), ...risky.keys()])].sort()
+    const marked = all.filter((file) => changes.has(file) || risky.has(file))
+    const shown = state.only ? marked : all
+    const root = { folders: new Map(), files: [], path: "" }
+    shown.forEach((file) => {
+      let node = root
+      file
+        .split("/")
+        .slice(0, -1)
+        .forEach((part) => {
+          const path = node.path + part + "/"
+          if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [], path, name: part })
+          node = node.folders.get(part)
+        })
+      node.files.push(file)
+    })
+    const tree = el("div", "tree")
+    const tools = el("label", "tree-tools")
+    const box = el("input")
+    box.type = "checkbox"
+    box.checked = state.only
+    box.addEventListener("change", () => {
+      state.only = box.checked
+      render()
+    })
+    append(tools, box, document.createTextNode("Show only changed files" + (risky.size ? " and files that may be affected" : "") + " (" + marked.length + ")"))
+    tree.append(tools, branch(root, changes, risky, entry))
+    if (files.length >= 3000) tree.append(el("p", "muted", "This project is large, so only part of it is listed."))
+    const details = el("div", "details")
+    detail(details, entry, list, changes, risky)
+    section.append(append(el("div", "project"), tree, details))
+    if (entry.unmatched && entry.unmatched.length) {
+      section.append(
+        append(
+          el("div", "warn"),
+          el("strong", "", "The agent wrote about files that have no changes in this checkpoint:"),
+          append(el("ul"), ...entry.unmatched.map((note) => append(el("li"), el("code", "", note.file), document.createTextNode(" — " + note.change)))),
+        ),
+      )
+    }
+    return section
+  }
+
+  function branch(node, changes, risky, entry) {
+    const holder = el("div")
+    ;[...node.folders.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((folder) => {
+        const inside = [...changes.keys()].filter((file) => file.startsWith(folder.path))
+        const near = [...risky.keys()].filter((file) => file.startsWith(folder.path) && !changes.has(file))
+        const open = state.only || (state.folders.has(folder.path) ? state.folders.get(folder.path) : inside.length + near.length > 0)
+        const row = append(el("button", "row folder"), el("span", "caret", open ? "▾" : "▸"), el("span", "name", folder.name + "/"))
+        const counted = [inside.length ? inside.length + " changed" : "", near.length ? near.length + " may be affected" : ""].filter(Boolean)
+        if (counted.length) row.append(el("span", "count", counted.join(" · ")))
+        row.setAttribute("aria-expanded", String(open))
+        row.addEventListener("click", () => {
+          state.folders.set(folder.path, !open)
+          render()
+        })
+        holder.append(row)
+        if (open) holder.append(append(el("div", "children"), branch(folder, changes, risky, entry)))
+      })
+    node.files.forEach((file) => {
+      const change = changes.get(file)
+      const row = el("button", "row" + (change || risky.has(file) ? "" : " plain") + (state.file === file ? " selected" : ""))
+      append(row, el("span", "caret", ""), el("span", "name", file.split("/").at(-1)))
+      if (change) row.append(el("span", "badge " + change.status, STATUS[change.status]))
+      if (risky.has(file)) row.append(el("span", "badge affected", "may be affected"))
+      if (change) row.append(el("span", "count", change.touched.map(short).join(" · ")))
+      row.title = file
+      row.addEventListener("click", () => pick(file))
+      holder.append(row)
+      // The functions and classes the checkpoint shown above changed in this file; each opens the diff where it changed.
+      const record = entry.files.find((item) => item.file === file)
+      const symbols = (record && record.symbols) || []
+      if (!symbols.length) return
+      const parts = el("div", "children")
+      symbols.slice(0, MAX_SYMBOLS).forEach((symbol, index) => {
+        const item = append(el("button", "row symbol"), el("span", "caret", ""), el("span", "name", named(symbol)), el("span", "change " + symbol.change, CHANGES[symbol.change]))
+        item.title = named(symbol) + (symbol.change === "removed" ? ", removed from lines " : ", lines ") + symbol.start + "–" + symbol.end
+        item.addEventListener("click", () => focus(key(entry) + ":" + file, file, index))
+        parts.append(item)
+      })
+      if (symbols.length > MAX_SYMBOLS) parts.append(el("p", "muted more", symbols.length - MAX_SYMBOLS + " more in the file's details"))
+      holder.append(parts)
+    })
+    return holder
+  }
+
+  // What changed in the picked file and why: the agent's note next to the lines from the diff.
+  function detail(details, entry, list, changes, risky) {
+    const file = state.file
+    if (!file) return details.append(el("p", "muted", "Click a file to see what changed in it and why."))
+    const change = changes.get(file)
+    const holder = (change && (change.touched.includes(entry) ? entry : change.touched.at(-1))) || undefined
+    const record = holder && holder.files.find((item) => item.file === file)
+    const title = append(el("h3", "path"), document.createTextNode(file))
+    if (record) title.append(el("span", "badge " + record.status, STATUS[record.status]), counts(record.additions, record.deletions))
+    details.append(title)
+    const risk = risky.get(file)
+    if (!record && !risk) details.append(el("p", "muted", "This file was not changed in this session."))
+    if (record) {
+      if (holder !== entry) details.append(el("p", "muted", "Changed in " + label(holder) + ": " + holder.title + ", not in the checkpoint shown above."))
+      if (record.note)
+        details.append(field("What it is", record.note.purpose), field("What changed and why", record.note.change))
+      else details.append(el("p", "muted", "The agent wrote no note for this file."))
+      if (record.symbols && record.symbols.length) details.append(parts(record.symbols, key(holder) + ":" + file, file))
+    }
+    if (risk) details.append(warning(risk, entry))
+    const links = list.flatMap((item) => item.links || [])
+    const near = (entry.affected || []).filter((item) => item.uses.includes(file)).map((item) => item.file)
+    const uses = [...new Set(links.filter((link) => link.from === file).map((link) => link.to))]
+    const users = [...new Set(links.filter((link) => link.to === file).map((link) => link.from))].filter((item) => !near.includes(item))
+    if (uses.length || users.length || near.length) {
+      const relations = el("div", "relations")
+      const chips = (items) => items.map((item) => {
+        const chip = el("button", "toggle", item)
+        chip.addEventListener("click", () => pick(item))
+        return chip
+      })
+      if (uses.length) relations.append(append(el("span"), document.createTextNode("Uses"), ...chips(uses)))
+      if (users.length) relations.append(append(el("span"), document.createTextNode("Used by"), ...chips(users)))
+      if (near.length) relations.append(append(el("span"), document.createTextNode("Unchanged files that use it"), ...chips(near)))
+      details.append(relations)
+    }
+    if (record) details.append(...diff(record, key(holder) + ":" + file))
+  }
+
+  // The functions and classes the change touched in a file; each opens the diff where it changed.
+  function parts(symbols, id, file) {
+    const chips = el("div", "chips")
+    symbols.forEach((symbol, index) => {
+      const chip = append(el("button", "chip"), document.createTextNode(named(symbol)), el("span", "change " + symbol.change, CHANGES[symbol.change]))
+      chip.addEventListener("click", () => focus(id, file, index))
+      chips.append(chip)
+    })
+    return append(el("div", "field"), append(el("h4"), document.createTextNode("Functions and classes it changed"), tag("fact", "from the code")), chips)
+  }
+
+  // Why a file the checkpoint did not change may still break, with the lines where it uses what changed.
+  function warning(item, entry) {
+    const text = el("p")
+    text.append(document.createTextNode("Not changed in this checkpoint, but it imports "))
+    item.uses.forEach((used, index) => {
+      if (index) text.append(document.createTextNode(index === item.uses.length - 1 ? " and " : ", "))
+      const link = el("button", "toggle", used)
+      link.addEventListener("click", () => pick(used))
+      text.append(link)
+    })
+    text.append(document.createTextNode(", which changed."))
+    if (item.names.length) text.append(document.createTextNode(" It uses " + sentence(mentioned(entry, item)) + ", so check that it still works with the new code."))
+    const table = el("table")
+    item.lines.forEach((line) => table.append(append(el("tr"), el("td", "n", String(line.line)), el("td", "t", line.text))))
+    return append(
+      el("div", "risk"),
+      append(el("div", "field"), append(el("h4"), document.createTextNode("May be affected"), tag("fact", "from the import lines"))),
+      text,
+      item.lines.length ? append(el("div", "lines"), table) : undefined,
+    )
+  }
+
+  function field(title, text) {
+    return append(el("div", "field"), append(el("h4"), document.createTextNode(title), tag("claim", "agent")), inline(el("p"), text))
+  }
+
+  // The changed lines block by block, each under the functions it falls in; the whole diff opens on request.
+  function diff(file, id) {
+    const open = state.open.has(id)
+    const changed = file.blocks.flatMap((block) => block.lines.filter((line) => line.kind !== "same"))
+    const heading = append(el("div", "field"), append(el("h4"), document.createTextNode(open ? "The full diff" : "What was added and removed"), tag("fact", "from the diff")))
+    if (!file.blocks.length) return [heading, el("p", "muted", "No line-by-line diff was saved for this file.")]
+    const table = el("table")
+    let room = KEY_LINES
+    file.blocks.forEach((block) => {
+      if (!open && room <= 0) return
+      const lines = open ? block.lines : block.lines.filter((line) => line.kind !== "same").slice(0, room)
+      room -= lines.length
+      table.append(where(block, file, id))
+      lines.forEach((line) => table.append(row(line)))
+    })
+    const result = [heading, append(el("div", "lines"), table)]
+    if (open || changed.length > KEY_LINES || file.blocks.some((block) => block.lines.some((line) => line.kind === "same"))) {
+      const more = el("button", "toggle", open ? "Show only the changed lines" : "Show the full diff (" + plural(changed.length, "changed line") + ")")
+      more.addEventListener("click", () => {
+        if (open) state.open.delete(id)
+        else state.open.add(id)
+        render()
+      })
+      result.push(more)
+    }
+    return result
+  }
+
+  // The header of one block of the diff: the functions it falls in and its lines.
+  function where(block, file, id) {
+    const names = (block.symbols || []).map((index) => named(file.symbols[index]))
+    const range = block.after.lines ? block.after : block.before
+    const lines = (block.after.lines ? "" : "removed ") + (range.lines > 1 ? "lines " + range.start + "–" + (range.start + range.lines - 1) : "line " + range.start)
+    const marked = state.mark && state.mark.id === id && (block.symbols || []).includes(state.mark.index)
+    const cell = el("td", "", names.length ? "In " + sentence(names) + " · " + lines : lines.charAt(0).toUpperCase() + lines.slice(1))
+    cell.colSpan = 4
+    return append(el("tr", "where" + (marked ? " mark" : "")), cell)
+  }
+
+  function row(line) {
+    return append(
+      el("tr", line.kind),
+      el("td", "n", line.old === undefined ? "" : String(line.old)),
+      el("td", "n", line.new === undefined ? "" : String(line.new)),
+      el("td", "s", line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "),
+      el("td", "t", line.text),
+    )
+  }
+
+  function did(entry) {
+    const section = part("What the agent did", tag("claim"))
+    section.append(append(el("ol", "steps"), ...entry.steps.map((step) => inline(el("li"), step.replace(/^\s*(?:\d+[.)]|[-*•])\s+/, "")))))
+    const decision = el("div", "decision")
+    decision.append(el("strong", "", "Your decision: "), document.createTextNode(DECISIONS[status(entry)]))
+    if (entry.comment) decision.append(document.createTextNode(" — “" + entry.comment + "”"))
+    section.append(decision)
+    return section
+  }
+
+  function session(stats, list) {
+    const section = part("This session")
+    const figures = [
+      [list.length, "checkpoints"],
+      [stats.checkpoints.approved + stats.checkpoints.auto, "approved"],
+      [stats.checkpoints.revised, "revisions asked"],
+      [stats.checkpoints.stopped, "stopped"],
+      [stats.checkpoints.forced, "forced by the safety net"],
+      [duration(stats.run.waitingMs), "your review time"],
+      [duration(stats.run.totalMs), "total time"],
+      [stats.changes.files, "files changed"],
+    ]
+    section.append(append(el("div", "figures"), ...figures.map((item) => append(el("div", "figure"), el("strong", "", String(item[0])), el("span", "", item[1])))))
+    const download = el("a", "button", "Download study data (JSON)")
+    download.href = base + "/stats"
+    download.setAttribute("download", "")
+    section.append(download)
+    return section
+  }
+
+  function live(on) {
+    document.getElementById("dot").className = "dot " + (on ? "on" : "off")
+    document.getElementById("status").textContent = on
+      ? "Live · updated " + new Date().toLocaleTimeString()
+      : "Not connected. Is OpenCode still running?"
+  }
+
+  async function poll() {
+    try {
+      const response = await fetch(base + "/data", { cache: "no-store" })
+      if (!response.ok) throw new Error(String(response.status))
+      const raw = await response.text()
+      live(true)
+      if (raw !== state.raw) {
+        state.raw = raw
+        state.data = JSON.parse(raw)
+        render()
+      }
+    } catch {
+      live(false)
+    }
+    setTimeout(poll, 1500)
+  }
+  poll()
+})()
+</script>
+</body>
+</html>

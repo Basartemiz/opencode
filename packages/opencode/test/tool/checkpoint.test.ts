@@ -9,6 +9,10 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Cause, Effect, Exit, Fiber, Queue, Schema } from "effect"
 import { CheckpointTool } from "../../src/tool/checkpoint"
 import { Checkpoint } from "../../src/checkpoint"
+import { CheckpointMap } from "../../src/checkpoint/map"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Ripgrep } from "@opencode-ai/core/ripgrep"
+import { LSP } from "../../src/lsp/lsp"
 import { Question } from "../../src/question"
 import { Session } from "../../src/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -33,6 +37,10 @@ const it = testEffect(
       Agent.node,
       Snapshot.node,
       RuntimeFlags.node,
+      CheckpointMap.node,
+      FSUtil.node,
+      Ripgrep.node,
+      LSP.node,
     ]),
   ),
 )
@@ -40,8 +48,15 @@ const it = testEffect(
 const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") }
 const params = {
   title: "Rename the greeting",
-  why: "The old greeting was too short.",
+  steps: ["I changed the greeting from hi to hello.", "I imported greet in main.ts."],
   impact: "Everything that prints the greeting changes.",
+  overview: "The greeting is now hello everywhere.",
+  flow: [
+    { from: "user", to: "src/main.ts", action: "runs main.ts" },
+    { from: "src/main.ts", to: "src/greet.ts", action: "asks greet() for the text" },
+  ],
+  notes: [{ file: "src/greet.ts", purpose: "Holds greet().", change: "It returns hello now." }],
+  check: "Run main.ts and look for hello.",
 }
 
 const write = (file: string, content: string) =>
@@ -124,11 +139,12 @@ const review = Effect.fn("CheckpointToolTest.review")(function* (
   turn: { sessionID: SessionID; messageID: MessageID },
   answer: string,
   recorded: unknown[] = [],
+  input = params,
 ) {
   const question = yield* Question.Service
   const info = yield* CheckpointTool
   const tool = yield* info.init()
-  const fiber = yield* tool.execute(params, context(turn, recorded)).pipe(Effect.forkScoped)
+  const fiber = yield* tool.execute(input, context(turn, recorded)).pipe(Effect.forkScoped)
   const asked = yield* pending(question)
   yield* question.reply({ requestID: asked.id, answers: [[answer]] })
   return { asked, exit: yield* Fiber.join(fiber).pipe(Effect.exit) }
@@ -147,14 +163,22 @@ it.instance(
 
       const { asked, exit } = yield* review(turn, "Approve")
 
-      expect(asked.questions[0].header).toBe("Step 1")
+      expect(asked.questions[0].header).toBe("Checkpoint 1")
       expect(asked.questions[0].question).toContain("src/greet.ts")
       expect(asked.questions[0].question).toContain("src/main.ts")
-      expect(asked.questions[0].question).toContain(params.why)
+      expect(asked.questions[0].question).toContain("1. I changed the greeting from hi to hello.")
+      expect(asked.questions[0].question).toContain("Full diff and map:\n  http://127.0.0.1:")
       if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
       const info = decode(exit.value.metadata)
       expect(info.decision).toBe("approve")
-      expect(info.step).toBe(1)
+      expect(info.number).toBe(1)
+      expect(info.steps).toEqual(params.steps)
+      expect(info.overview).toBe(params.overview)
+      expect(info.flow).toEqual(params.flow)
+      expect(info.notes).toEqual(params.notes)
+      expect(info.check).toBe(params.check)
+      // Computed from the import lines, so the map can draw which file uses which.
+      expect(info.links).toEqual([{ from: "src/main.ts", to: "src/greet.ts" }])
       expect(info.files.map((file) => [file.file, file.status, file.additions, file.deletions])).toEqual([
         ["src/greet.ts", "modified", 1, 1],
         ["src/main.ts", "added", 1, 0],
@@ -162,6 +186,60 @@ it.instance(
       expect(info.files[0].hunks).toHaveLength(1)
       expect(info.files[0].hunks[0]).toMatchObject({ additions: 1, deletions: 1 })
       expect(exit.value.output).toContain("approved")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "checks the agent's arrows against the imports of files the checkpoint did not change",
+  () =>
+    Effect.gen(function* () {
+      yield* write("src/app.ts", "import { greet } from './greet'\n")
+      yield* write("src/greet.ts", "export const greet = () => 'hi'\n")
+      const turn = yield* start()
+      yield* write("src/greet.ts", "export const greet = () => 'hello'\n")
+
+      const { exit } = yield* review(turn, "Approve", [], {
+        ...params,
+        flow: [
+          { from: "./src/app.ts", to: "src/greet.ts", action: "asks greet() for the text" },
+          { from: "../outside.ts", to: "src/greet.ts", action: "is never read" },
+        ],
+      })
+
+      if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
+      const info = decode(exit.value.metadata)
+      expect(info.files.map((file) => file.file)).toEqual(["src/greet.ts"])
+      expect(info.links).toEqual([{ from: "src/app.ts", to: "src/greet.ts" }])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "records the functions the change touched and the unchanged files that use them",
+  () =>
+    Effect.gen(function* () {
+      yield* write("src/cart.js", "export function total(items) {\n  return items.length\n}\n")
+      yield* write("src/checkout.js", "import { total } from './cart.js'\nexport const pay = (items) => total(items)\n")
+      const turn = yield* start()
+      yield* write("src/cart.js", "export function total(items) {\n  return items.length * 2\n}\n")
+
+      const { exit } = yield* review(turn, "Approve")
+
+      if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
+      const info = decode(exit.value.metadata)
+      expect(info.files[0].symbols).toEqual([{ name: "total", kind: "function", change: "changed", start: 1, end: 3 }])
+      expect(info.affected).toEqual([
+        {
+          file: "src/checkout.js",
+          uses: ["src/cart.js"],
+          names: ["total"],
+          lines: [
+            { line: 1, text: "import { total } from './cart.js'" },
+            { line: 2, text: "export const pay = (items) => total(items)" },
+          ],
+        },
+      ])
     }),
   { git: true },
 )
@@ -230,7 +308,7 @@ it.instance(
 
       const second = yield* review(turn, "Approve")
 
-      expect(second.asked.questions[0].header).toBe("Step 2")
+      expect(second.asked.questions[0].header).toBe("Checkpoint 2")
       if (!Exit.isSuccess(second.exit)) throw new Error("checkpoint failed")
       expect(decode(second.exit.value.metadata).files.map((file) => file.file)).toEqual(["second.ts"])
     }),
@@ -267,4 +345,44 @@ it.instance(
       expect(decode(result.metadata).decision).toBe("auto")
     }),
   { git: true },
+)
+
+it.instance("uses the edit tools' own diffs when the project is not a git repository", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const instance = yield* TestInstance
+    const turn = yield* start()
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      sessionID: turn.sessionID,
+      messageID: turn.messageID,
+      type: "tool",
+      tool: "edit",
+      callID: "call_edit",
+      state: {
+        status: "completed",
+        input: {},
+        output: "",
+        title: "",
+        metadata: {
+          filediff: {
+            file: path.join(instance.directory, "greet.ts"),
+            patch: ["Index: greet.ts", "--- greet.ts", "+++ greet.ts", "@@ -1 +1 @@", "-'hi'", "+'hello'"].join("\n"),
+            additions: 1,
+            deletions: 1,
+          },
+        },
+        time: { start: 0, end: 0 },
+      },
+    })
+
+    const { asked, exit } = yield* review(turn, "Approve")
+
+    expect(asked.questions[0].question).toContain("shell commands are not shown")
+    expect(asked.questions[0].question).toContain("M greet.ts +1 -1")
+    if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
+    const info = decode(exit.value.metadata)
+    expect(info.source).toBe("edits")
+    expect(info.files.map((file) => file.file)).toEqual(["greet.ts"])
+  }),
 )

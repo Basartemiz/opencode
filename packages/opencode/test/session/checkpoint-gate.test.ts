@@ -28,7 +28,7 @@ const understand: Agent.Info = {
   name: "understand",
   mode: "primary",
   options: {},
-  checkpoint: { edits: 2, lines: 100 },
+  checkpoint: { files: 2, lines: 400 },
   permission: [{ permission: "*", pattern: "*", action: "allow" }],
 }
 
@@ -49,7 +49,7 @@ const assistant: SessionV1.Assistant = {
   time: { created: 1 },
 }
 
-const editPart = (): SessionV1.ToolPart => ({
+const editPart = (file: string): SessionV1.ToolPart => ({
   id: PartID.ascending(),
   sessionID,
   messageID: assistant.id,
@@ -61,13 +61,13 @@ const editPart = (): SessionV1.ToolPart => ({
     input: {},
     output: "",
     title: "",
-    metadata: { filediff: { additions: 1, deletions: 0 } },
+    metadata: { filediff: { file, additions: 1, deletions: 0 } },
     time: { start: 0, end: 0 },
   },
 })
 
-// Two edits already happened in earlier steps without a checkpoint.
-const history: SessionV1.WithParts[] = [{ info: assistant, parts: [editPart(), editPart()] }]
+// Two files were already changed in earlier steps without a checkpoint.
+const history: SessionV1.WithParts[] = [{ info: assistant, parts: [editPart("a.ts"), editPart("b.ts")] }]
 
 const layer = Layer.mergeAll(
   Layer.succeed(
@@ -119,7 +119,7 @@ const layer = Layer.mergeAll(
             execute: () =>
               Effect.succeed({
                 title: "edit",
-                metadata: { filediff: { additions: 1, deletions: 0 } },
+                metadata: { filediff: { file: "c.ts", additions: 1, deletions: 0 } },
                 output: "Edit applied successfully.",
               }),
           } satisfies Tool.Def,

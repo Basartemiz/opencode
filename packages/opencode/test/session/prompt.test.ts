@@ -12,6 +12,7 @@ import { fileURLToPath } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
+import { Checkpoint } from "@/checkpoint"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
 import { LSP } from "@/lsp/lsp"
@@ -2473,7 +2474,7 @@ noLLMServer.instance(
 
 const understandCfg = (url: string) => ({
   ...providerCfg(url),
-  agent: { understand: { checkpoint: { edits: 2 } } },
+  agent: { understand: { checkpoint: { files: 2 } } },
 })
 
 const understand = Effect.fn("test.understand")(function* (text: string) {
@@ -2528,7 +2529,7 @@ it.instance(
       expect(body).toContain("Understand Mode")
       expect(body).toContain('"name":"checkpoint"')
       // The checkpoint limits are OpenCode settings, not provider request options.
-      expect(body).not.toContain('"edits"')
+      expect(body).not.toContain(JSON.stringify(Checkpoint.LIMITS))
     }),
   { git: true },
 )
@@ -2564,7 +2565,15 @@ it.instance(
       const { dir, llm } = yield* useServerConfig(providerCfg)
       const prompt = yield* SessionPrompt.Service
       yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
-      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      yield* llm.tool("checkpoint", {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+        check: "Open greet.txt.",
+      })
       yield* llm.text("done")
       const sessionID = yield* understand("add a greeting file")
 
@@ -2589,7 +2598,15 @@ it.instance(
       const { dir, llm } = yield* useServerConfig(providerCfg)
       const prompt = yield* SessionPrompt.Service
       yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
-      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      yield* llm.tool("checkpoint", {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+        check: "Open greet.txt.",
+      })
       const sessionID = yield* understand("add a greeting file")
 
       const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
@@ -2612,7 +2629,15 @@ it.instance(
       const prompt = yield* SessionPrompt.Service
       yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
       yield* llm.text("done")
-      yield* llm.tool("checkpoint", { title: "Add greeting", why: "The user asked for it.", impact: "Adds one file." })
+      yield* llm.tool("checkpoint", {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+        check: "Open greet.txt.",
+      })
       yield* llm.text("all reviewed")
       const sessionID = yield* understand("add a greeting file")
 

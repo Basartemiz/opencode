@@ -355,6 +355,7 @@ manage sessions
 Commands:
   opencode session list                list sessions
   opencode session delete <sessionID>  delete a session
+  opencode session stats <sessionID>   print a session's user-study measurements as JSON
 
 Options:
   -h, --help        show help                                                              [boolean]

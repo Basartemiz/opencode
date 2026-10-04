@@ -1706,7 +1706,7 @@ export type AgentConfig = {
   steps?: number
   maxSteps?: number
   checkpoint?: {
-    edits?: number
+    files?: number
     lines?: number
   }
   permission?: PermissionConfig
@@ -1734,7 +1734,7 @@ export type AgentConfig = {
     | "info"
     | number
     | {
-        edits?: number
+        files?: number
         lines?: number
       }
     | PermissionConfig
@@ -2379,7 +2379,7 @@ export type Agent = {
   }
   steps?: number
   checkpoint?: {
-    edits: number
+    files: number
     lines: number
   }
 }

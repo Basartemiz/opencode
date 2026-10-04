@@ -1090,7 +1090,7 @@ const layer = Layer.effect(
     }) {
       const agent = yield* agents.get(input.user.agent)
       if (!agent?.checkpoint) return false
-      if (Checkpoint.usage(input.msgs, agent.name).edits === 0) return false
+      if (Checkpoint.usage(input.msgs, agent.name).files.size === 0) return false
       const reminded = input.msgs.some(
         (msg) =>
           msg.info.id === input.user.id &&

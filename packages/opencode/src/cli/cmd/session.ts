@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
 import { Session } from "@/session/session"
+import { Checkpoint } from "@/checkpoint"
 import { SessionID } from "../../session/schema"
 import { UI } from "../ui"
 import { Locale } from "@/util/locale"
@@ -44,7 +45,8 @@ function pagerCmd(): string[] {
 export const SessionCommand = cmd({
   command: "session",
   describe: "manage sessions",
-  builder: (yargs: Argv) => yargs.command(SessionListCommand).command(SessionDeleteCommand).demandCommand(),
+  builder: (yargs: Argv) =>
+    yargs.command(SessionListCommand).command(SessionDeleteCommand).command(SessionStatsCommand).demandCommand(),
   async handler() {},
 })
 
@@ -64,6 +66,27 @@ export const SessionDeleteCommand = effectCmd({
       .remove(sessionID)
       .pipe(Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)))
     UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Session ${args.sessionID} deleted` + UI.Style.TEXT_NORMAL)
+  }),
+})
+
+// The same measurements the understand map exports, for any session, so build-mode runs can be compared too.
+export const SessionStatsCommand = effectCmd({
+  command: "stats <sessionID>",
+  describe: "print a session's user-study measurements as JSON",
+  builder: (yargs) =>
+    yargs.positional("sessionID", {
+      describe: "session ID to measure",
+      type: "string",
+      demandOption: true,
+    }),
+  handler: Effect.fn("Cli.session.stats")(function* (args) {
+    const svc = yield* Session.Service
+    const sessionID = SessionID.make(args.sessionID)
+    const found = yield* Effect.all({ info: svc.get(sessionID), messages: svc.messages({ sessionID }) }).pipe(
+      Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)),
+    )
+    const session = { id: found.info.id, title: found.info.title }
+    console.log(JSON.stringify({ session, ...Checkpoint.stats(found.messages) }, null, 2))
   }),
 })
 

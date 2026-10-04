@@ -686,6 +686,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
+        name: "agent.understand",
+        title: "Switch to understand mode",
+        category: "Agent",
+        hidden: !local.agent.list().some((agent) => agent.name === "understand"),
+        slashName: "understand",
+        run: () => {
+          local.agent.set("understand")
+        },
+      },
+      {
         name: "mcp.list",
         title: "Toggle MCPs",
         category: "Agent",

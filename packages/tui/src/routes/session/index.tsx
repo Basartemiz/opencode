@@ -1780,6 +1780,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={display() === "skill"}>
           <Skill {...toolprops} />
         </Match>
+        <Match when={display() === "checkpoint"}>
+          <Checkpoint {...toolprops} />
+        </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
         </Match>
@@ -2572,6 +2575,36 @@ function Question(props: ToolProps) {
   )
 }
 
+// One line per checkpoint: the review itself is in the question panel and on the map page.
+function Checkpoint(props: ToolProps) {
+  const label = createMemo(() => formatCheckpoint(props.input, props.metadata))
+  return (
+    <InlineTool icon="◆" pending="Preparing checkpoint…" complete={label()} part={props.part}>
+      {label()}
+    </InlineTool>
+  )
+}
+
+const CHECKPOINT_DECISIONS: Record<string, string> = {
+  approve: "approved",
+  revise: "revision asked",
+  stop: "stopped",
+  auto: "approved automatically",
+}
+
+export function formatCheckpoint(input: Record<string, unknown>, metadata: Record<string, unknown>) {
+  const number = numberValue(metadata.number)
+  if (number === undefined) return metadata.skipped ? "Checkpoint skipped: no files changed" : undefined
+  const revision = numberValue(metadata.revision) ?? 1
+  const decision = stringValue(metadata.decision)
+  return [
+    `Checkpoint ${number}${revision > 1 ? ` (revision ${revision})` : ""}: ${stringValue(input.title) ?? ""}`,
+    decision && (CHECKPOINT_DECISIONS[decision] ?? decision),
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
 function Skill(props: ToolProps) {
   return (
     <InlineTool icon="→" pending="Loading skill…" complete={stringValue(props.input.name)} part={props.part}>
@@ -2638,6 +2671,7 @@ const toolDisplays = new Set([
   "question",
   "skill",
   "execute",
+  "checkpoint",
 ])
 
 export function toolDisplay(tool: string) {

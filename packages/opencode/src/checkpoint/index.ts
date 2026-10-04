@@ -3,20 +3,31 @@ import type { SessionV1 } from "@opencode-ai/core/v1/session"
 
 const EDIT_TOOLS = new Set(["edit", "write", "apply_patch"])
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+// Several edits of one file are stored as concatenated patches, each starting with its own file header.
+const PATCH_START = /^(?=Index: |diff --git )/m
+// The terminal shows a checkpoint in a small panel, so its text is kept to one screen; the map page shows the rest.
+const WIDTH = 78
+const ROW_WIDTH = 76
+const MAX_ROWS = 3
+// Agents sometimes number their own steps; the summary numbers them itself.
+const STEP_MARKER = /^\s*(?:\d+[.)]|[-*•])\s+/
 
 export const Limits = Schema.Struct({
-  edits: Schema.Finite,
+  files: Schema.Finite,
   lines: Schema.Finite,
 })
 export type Limits = typeof Limits.Type
 
-// Edits and changed lines an agent may make before it has to call checkpoint.
-export const LIMITS: Limits = { edits: 5, lines: 100 }
+// Different files and changed lines an agent may build up before it has to call checkpoint.
+export const LIMITS: Limits = { files: 6, lines: 400 }
 
 const Range = Schema.Struct({
   start: Schema.Finite,
   lines: Schema.Finite,
 })
+type Range = typeof Range.Type
+
+type Line = { kind: "add" | "del" | "same"; text: string; old?: number; new?: number }
 
 export const Hunk = Schema.Struct({
   before: Range,
@@ -26,6 +37,19 @@ export const Hunk = Schema.Struct({
 })
 export type Hunk = typeof Hunk.Type
 
+// A function, class, or other named part of a file that a change touched. Its lines are in the file after the
+// change, or in the file before it when the change removed it.
+export const Symbol = Schema.Struct({
+  name: Schema.String,
+  kind: Schema.Literals(["class", "type", "function", "method", "variable"]),
+  // The class or function it sits in, such as the class of a method.
+  parent: Schema.optional(Schema.String),
+  change: Schema.Literals(["added", "changed", "removed"]),
+  start: Schema.Finite,
+  end: Schema.Finite,
+})
+export type Symbol = typeof Symbol.Type
+
 export const File = Schema.Struct({
   file: Schema.String,
   status: Schema.Literals(["added", "deleted", "modified"]),
@@ -33,22 +57,55 @@ export const File = Schema.Struct({
   deletions: Schema.Finite,
   hunks: Schema.Array(Hunk),
   patch: Schema.optional(Schema.String),
+  symbols: Schema.optional(Schema.Array(Symbol)),
 })
 export type File = typeof File.Type
 
 export const Decision = Schema.Literals(["approve", "revise", "stop", "auto"])
 export type Decision = typeof Decision.Type
 
-// Stored as the checkpoint tool part's metadata, so every step survives in session history.
+// The agent's explainer for the map page. These are claims; the map shows them next to the computed diff.
+export const Note = Schema.Struct({ file: Schema.String, purpose: Schema.String, change: Schema.String })
+export type Note = typeof Note.Type
+
+// One arrow of the agent's state-machine explanation: what happens when the program moves from one file to the next.
+export const Transition = Schema.Struct({ from: Schema.String, to: Schema.String, action: Schema.String })
+export type Transition = typeof Transition.Type
+
+// A changed file and a project file it uses, read from its import lines.
+export const Link = Schema.Struct({ from: Schema.String, to: Schema.String })
+export type Link = typeof Link.Type
+
+// A file the checkpoint did not change that imports a changed file, so the change may break it.
+export const Affected = Schema.Struct({
+  file: Schema.String,
+  // The changed files it imports.
+  uses: Schema.Array(Schema.String),
+  // The changed or removed functions and classes of those files that it mentions.
+  names: Schema.Array(Schema.String),
+  // Where it mentions them, or where it imports a changed file when it mentions none.
+  lines: Schema.Array(Schema.Struct({ line: Schema.Finite, text: Schema.String })),
+})
+export type Affected = typeof Affected.Type
+
+// Stored as the checkpoint tool part's metadata, so every checkpoint survives in session history.
 export const Info = Schema.Struct({
-  step: Schema.Finite,
+  number: Schema.Finite,
   revision: Schema.Finite,
   title: Schema.String,
-  why: Schema.String,
+  steps: Schema.Array(Schema.String),
   impact: Schema.String,
+  overview: Schema.optional(Schema.String),
+  flow: Schema.optional(Schema.Array(Transition)),
+  notes: Schema.optional(Schema.Array(Note)),
+  check: Schema.optional(Schema.String),
+  links: Schema.optional(Schema.Array(Link)),
+  affected: Schema.optional(Schema.Array(Affected)),
   base: Schema.optional(Schema.String),
   snapshot: Schema.optional(Schema.String),
   files: Schema.Array(File),
+  // "edits" when there were no git snapshots and the files came from the edit tools' own diffs.
+  source: Schema.optional(Schema.Literals(["snapshot", "edits"])),
   decision: Decision,
   comment: Schema.optional(Schema.String),
   time: Schema.Struct({
@@ -58,13 +115,16 @@ export const Info = Schema.Struct({
 })
 export type Info = typeof Info.Type
 
+// A checkpoint that is still waiting for the user has no decision yet.
+const Entry = Schema.Struct({ ...Info.fields, decision: Schema.optional(Decision) })
+
 export class RequiredError extends Schema.TaggedErrorClass<RequiredError>()("CheckpointRequiredError", {
-  edits: Schema.Finite,
+  files: Schema.Finite,
   lines: Schema.Finite,
   limits: Limits,
 }) {
   override get message() {
-    return `Checkpoint required: you made ${this.edits} edits changing ${this.lines} lines since the last checkpoint (limit: ${this.limits.edits} edits or ${this.limits.lines} lines). Call the checkpoint tool now so the user can review these changes, then continue.`
+    return `Checkpoint required: you changed ${this.files} ${this.files === 1 ? "file" : "files"} and ${this.lines} lines since the last checkpoint (limit: ${this.limits.files} files or ${this.limits.lines} lines). Call the checkpoint tool now so the user can review these changes, then continue.`
   }
 }
 
@@ -79,36 +139,56 @@ export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Check
 }
 
 export function hunks(patch: string): Hunk[] {
-  const lines = patch.split("\n")
-  return lines.flatMap((line, index) => {
-    const header = line.match(HUNK_HEADER)
-    if (!header) return []
-    const end = lines.findIndex((next, position) => position > index && next.startsWith("@@"))
-    const body = lines.slice(index + 1, end === -1 ? undefined : end)
-    return [
-      {
-        before: { start: Number(header[1]), lines: Number(header[2] ?? 1) },
-        after: { start: Number(header[3]), lines: Number(header[4] ?? 1) },
-        additions: body.filter((item) => item.startsWith("+")).length,
-        deletions: body.filter((item) => item.startsWith("-")).length,
-      },
-    ]
+  return blocks(patch).map((block) => ({
+    before: block.before,
+    after: block.after,
+    additions: block.lines.filter((line) => line.kind === "add").length,
+    deletions: block.lines.filter((line) => line.kind === "del").length,
+  }))
+}
+
+// The changed blocks of a patch with every line and its line numbers, for the map page.
+export function blocks(patch: string): { before: Range; after: Range; lines: Line[] }[] {
+  return patch.split(PATCH_START).flatMap((section) => {
+    const lines = section.split("\n")
+    return lines.flatMap((line, index) => {
+      const header = line.match(HUNK_HEADER)
+      if (!header) return []
+      const end = lines.findIndex((next, position) => position > index && next.startsWith("@@"))
+      const before = { start: Number(header[1]), lines: Number(header[2] ?? 1) }
+      const after = { start: Number(header[3]), lines: Number(header[4] ?? 1) }
+      const body = lines.slice(index + 1, end === -1 ? undefined : end).filter((item) => /^[-+ ]/.test(item))
+      return [{ before, after, lines: numbered(body, before.start, after.start) }]
+    })
   })
 }
 
-// The agent's edits and changed lines since its last checkpoint, used to force a checkpoint when it skips them.
+// The files and lines the agent changed since its last checkpoint, used to force a checkpoint when it skips them.
 export function usage(messages: SessionV1.WithParts[], agent: string) {
-  const parts = messages.flatMap((message) =>
-    message.info.role === "assistant" && message.info.agent === agent ? message.parts : [],
+  const done = unreviewed(messages, agent)
+  return {
+    files: new Set(done.map((change) => change.file)),
+    lines: done.reduce((total, change) => total + change.additions + change.deletions, 0),
+  }
+}
+
+// Without git snapshots, the edit tools' own diffs are the record of what the agent changed since its last checkpoint.
+export function edited(messages: SessionV1.WithParts[], agent: string): File[] {
+  const groups = unreviewed(messages, agent).reduce(
+    (result, change) => result.set(change.file, [...(result.get(change.file) ?? []), change]),
+    new Map<string, Change[]>(),
   )
-  return parts
-    .slice(parts.findLastIndex(resets) + 1)
-    .flatMap((part) =>
-      part.type === "tool" && EDIT_TOOLS.has(part.tool) && part.state.status === "completed"
-        ? [changed(part.tool, part.state.metadata)]
-        : [],
-    )
-    .reduce((total, lines) => ({ edits: total.edits + 1, lines: total.lines + lines }), { edits: 0, lines: 0 })
+  return [...groups].map(([file, items]) => {
+    const patch = items.map((item) => item.patch).join("\n")
+    return {
+      file,
+      status: items[0]?.status === "added" ? "added" : items.at(-1)?.status === "deleted" ? "deleted" : "modified",
+      additions: items.reduce((total, item) => total + item.additions, 0),
+      deletions: items.reduce((total, item) => total + item.deletions, 0),
+      hunks: hunks(patch),
+      patch,
+    }
+  })
 }
 
 export function next(messages: SessionV1.WithParts[]) {
@@ -119,9 +199,85 @@ export function next(messages: SessionV1.WithParts[]) {
       return info ? [info] : []
     })
     .at(-1)
-  if (!last) return { step: 1, revision: 1 }
-  if (last.decision === "revise") return { step: last.step, revision: last.revision + 1 }
-  return { step: last.step + 1, revision: 1 }
+  if (!last) return { number: 1, revision: 1 }
+  if (last.decision === "revise") return { number: last.number, revision: last.revision + 1 }
+  return { number: last.number + 1, revision: 1 }
+}
+
+// Every checkpoint as the map page shows it: answered, or still waiting for the user's decision.
+export function history(messages: SessionV1.WithParts[]) {
+  return messages
+    .flatMap((message) => message.parts)
+    .flatMap((part) => {
+      if (part.type !== "tool" || part.tool !== "checkpoint" || !("metadata" in part.state)) return []
+      const entry = Option.getOrUndefined(Schema.decodeUnknownOption(Entry)(part.state.metadata))
+      const status = part.state.status === "running" ? "waiting" : "answered"
+      if (!entry || (status === "answered" && !entry.decision)) return []
+      return [{ ...entry, status }]
+    })
+}
+
+// Measures a session for a user study, so understand-mode runs can be compared with build-mode runs of similar tasks.
+export function stats(messages: SessionV1.WithParts[]) {
+  const assistants = messages.flatMap((message) => (message.info.role === "assistant" ? [message.info] : []))
+  const parts = messages.flatMap((message) => message.parts)
+  const tools = parts.filter((part): part is SessionV1.ToolPart => part.type === "tool")
+  const checkpoints = parts.flatMap((part) => {
+    const info = record(part)
+    return info ? [info] : []
+  })
+  const done = tools.flatMap((part) =>
+    part.state.status === "completed" ? changes(part.tool, part.state.metadata) : [],
+  )
+  const started = messages.find((message) => message.info.role === "user")?.info.time.created
+  const finished = assistants.length
+    ? Math.max(...assistants.map((info) => info.time.completed ?? info.time.created))
+    : undefined
+  const waits = checkpoints.map((info) => ({
+    number: info.number,
+    revision: info.revision,
+    title: info.title,
+    decision: info.decision,
+    comment: info.comment,
+    waitedMs: info.time.answered === undefined ? undefined : info.time.answered - info.time.asked,
+    files: info.files.length,
+    additions: info.files.reduce((total, file) => total + file.additions, 0),
+    deletions: info.files.reduce((total, file) => total + file.deletions, 0),
+  }))
+  const totalMs = started !== undefined && finished !== undefined ? finished - started : 0
+  const waitingMs = waits.reduce((total, wait) => total + (wait.waitedMs ?? 0), 0)
+  return {
+    agents: [...new Set(assistants.map((info) => info.agent))],
+    run: { started, finished, totalMs, waitingMs, workingMs: totalMs - waitingMs },
+    checkpoints: {
+      total: checkpoints.length,
+      approved: checkpoints.filter((info) => info.decision === "approve").length,
+      revised: checkpoints.filter((info) => info.decision === "revise").length,
+      stopped: checkpoints.filter((info) => info.decision === "stop").length,
+      auto: checkpoints.filter((info) => info.decision === "auto").length,
+      forced: tools.filter(
+        (part) =>
+          EDIT_TOOLS.has(part.tool) &&
+          part.state.status === "error" &&
+          part.state.error.includes("Checkpoint required"),
+      ).length,
+    },
+    waits,
+    changes: {
+      edits: tools.filter((part) => EDIT_TOOLS.has(part.tool) && part.state.status === "completed").length,
+      files: new Set(done.map((change) => change.file)).size,
+      additions: done.reduce((total, change) => total + change.additions, 0),
+      deletions: done.reduce((total, change) => total + change.deletions, 0),
+    },
+    model: {
+      steps: parts.filter((part) => part.type === "step-start").length,
+      cost: assistants.reduce((total, info) => total + info.cost, 0),
+      tokens: {
+        input: assistants.reduce((total, info) => total + info.tokens.input, 0),
+        output: assistants.reduce((total, info) => total + info.tokens.output, 0),
+      },
+    },
+  }
 }
 
 // The snapshot the next checkpoint diffs against: the previous checkpoint, or the start of the agent's current run.
@@ -136,33 +292,91 @@ export function baseline(messages: SessionV1.WithParts[], agent: string) {
   }, undefined)
 }
 
-// The text the user reviews: facts computed from the diff, kept apart from the agent's own explanation.
-export function summary(input: Pick<Info, "step" | "revision" | "title" | "why" | "impact" | "files">) {
-  const width = Math.max(0, ...input.files.map((file) => file.file.length))
+// The text the user reviews in the terminal: the agent's claims, then the facts from the diff, kept to one screen.
+// The map page at `map` shows the full steps, the agent's explainer, and every changed line.
+export function summary(
+  input: Pick<Info, "number" | "revision" | "title" | "steps" | "impact" | "files" | "source">,
+  map?: string,
+) {
+  const entries = input.files.map(
+    (file) => `${STATUS[file.status]} ${file.file} ${counts(file.additions, file.deletions)}`,
+  )
+  const rows = wrap(entries, ROW_WIDTH).slice(0, MAX_ROWS)
+  const hidden = entries.length - rows.reduce((total, row) => total + row.length, 0)
   return [
     `${label(input)}: ${input.title}`,
     "",
-    "What changed (computed from the diff):",
-    ...(input.files.length
-      ? input.files.map(
-          (file) => `  ${STATUS[file.status]} ${file.file.padEnd(width)}  +${file.additions} -${file.deletions}`,
-        )
-      : ["  The exact diff is unavailable: snapshots need a git repository."]),
+    "Agent says (not verified):",
+    ...input.steps.flatMap((step, index) => hang(`  ${index + 1}. `, step.replace(STEP_MARKER, ""))),
+    ...hang("  Impact: ", input.impact),
     "",
-    "Agent's explanation (not verified):",
-    `  Why: ${input.why}`,
-    `  Impact: ${input.impact}`,
-    "",
-    "Approve to continue, Stop to end the run, or type feedback to request changes.",
+    `Changed (from the diff): ${input.files.length} ${input.files.length === 1 ? "file" : "files"}, ${counts(
+      input.files.reduce((total, file) => total + file.additions, 0),
+      input.files.reduce((total, file) => total + file.deletions, 0),
+    )}`,
+    ...(input.source === "edits"
+      ? ["  Taken from the agent's edit tools; changes made with shell commands are not shown."]
+      : []),
+    ...rows.map((row) => `  ${row.join("   ")}`),
+    ...(hidden > 0 ? [`  … ${hidden} more files on the map`] : []),
+    // The link gets a line of its own, so the terminal does not break it and it stays clickable.
+    ...(map ? ["", "Full diff and map:", `  ${map}`] : []),
   ].join("\n")
 }
 
-export function label(input: Pick<Info, "step" | "revision">) {
-  if (input.revision > 1) return `Step ${input.step} (revision ${input.revision})`
-  return `Step ${input.step}`
+export function label(input: Pick<Info, "number" | "revision">) {
+  if (input.revision > 1) return `Checkpoint ${input.number} (revision ${input.revision})`
+  return `Checkpoint ${input.number}`
 }
 
 const STATUS = { added: "A", deleted: "D", modified: "M" } as const
+
+function counts(additions: number, deletions: number) {
+  if (!deletions) return `+${additions}`
+  if (!additions) return `-${deletions}`
+  return `+${additions} -${deletions}`
+}
+
+// Wraps the agent's text under its label instead of cutting it, so nothing it wrote is lost.
+function hang(label: string, text: string) {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .reduce<string[]>((lines, word) => {
+      const last = lines.at(-1)
+      if (last === undefined) return [label + word]
+      if (`${last} ${word}`.length <= WIDTH) return [...lines.slice(0, -1), `${last} ${word}`]
+      return [...lines, " ".repeat(label.length) + word]
+    }, [])
+}
+
+// Packs the entries into rows of at most `width` characters; an entry wider than that gets a row of its own.
+function wrap(entries: string[], width: number) {
+  return entries.reduce<string[][]>((rows, entry) => {
+    const last = rows.at(-1)
+    if (last && [...last, entry].join("   ").length <= width) return [...rows.slice(0, -1), [...last, entry]]
+    return [...rows, [entry]]
+  }, [])
+}
+
+function numbered(body: string[], old: number, next: number) {
+  return body.reduce<{ old: number; new: number; lines: Line[] }>(
+    (result, line) => {
+      const text = line.slice(1)
+      if (line.startsWith("+"))
+        return { ...result, new: result.new + 1, lines: [...result.lines, { kind: "add", text, new: result.new }] }
+      if (line.startsWith("-"))
+        return { ...result, old: result.old + 1, lines: [...result.lines, { kind: "del", text, old: result.old }] }
+      return {
+        old: result.old + 1,
+        new: result.new + 1,
+        lines: [...result.lines, { kind: "same", text, old: result.old, new: result.new }],
+      }
+    },
+    { old, new: next, lines: [] },
+  ).lines
+}
 
 // Tracks one provider step's tool calls for agents with checkpoint limits.
 export function gate(agent: { name: string; checkpoint?: Limits }, messages: SessionV1.WithParts[]) {
@@ -182,14 +396,14 @@ export function gate(agent: { name: string; checkpoint?: Limits }, messages: Ses
               }),
             ),
           )
-          state.edits = 0
+          state.files = new Set()
           state.lines = 0
           return result
         }
         if (!EDIT_TOOLS.has(tool)) return yield* effect
         if (state.reviewing) return yield* Effect.die(new BlockedError({ reason: "reviewing" }))
-        if (state.edits >= limits.edits || state.lines > limits.lines)
-          return yield* Effect.die(new RequiredError({ edits: state.edits, lines: state.lines, limits }))
+        if (state.files.size >= limits.files || state.lines > limits.lines)
+          return yield* Effect.die(new RequiredError({ files: state.files.size, lines: state.lines, limits }))
         state.editing++
         const result = yield* effect.pipe(
           Effect.ensuring(
@@ -198,27 +412,71 @@ export function gate(agent: { name: string; checkpoint?: Limits }, messages: Ses
             }),
           ),
         )
-        state.edits++
-        state.lines += changed(tool, result.metadata)
+        const done = changes(tool, result.metadata)
+        state.files = new Set([...state.files, ...done.map((change) => change.file)])
+        state.lines += done.reduce((total, change) => total + change.additions + change.deletions, 0)
         return result
       }),
   }
 }
 
 const Counts = Schema.Struct({ additions: Schema.Finite, deletions: Schema.Finite })
-const EditResult = Schema.Struct({ filediff: Counts })
-const PatchResult = Schema.Struct({ files: Schema.Array(Counts) })
 const Snapshotted = Schema.Struct({ snapshot: Schema.String })
+const EditDiff = Schema.Struct({
+  exists: Schema.optional(Schema.Boolean),
+  filediff: Schema.Struct({ ...Counts.fields, file: Schema.String, patch: Schema.optional(Schema.String) }),
+})
+const PatchDiff = Schema.Struct({
+  files: Schema.Array(
+    Schema.Struct({
+      ...Counts.fields,
+      filePath: Schema.String,
+      movePath: Schema.optional(Schema.String),
+      type: Schema.String,
+      patch: Schema.optional(Schema.String),
+    }),
+  ),
+})
 
-function changed(tool: string, metadata: unknown) {
+type Change = Omit<File, "hunks">
+
+// The file changes the agent's completed edits made since its last checkpoint.
+function unreviewed(messages: SessionV1.WithParts[], agent: string) {
+  const parts = messages.flatMap((message) =>
+    message.info.role === "assistant" && message.info.agent === agent ? message.parts : [],
+  )
+  return parts
+    .slice(parts.findLastIndex(resets) + 1)
+    .flatMap((part) =>
+      part.type === "tool" && part.state.status === "completed" ? changes(part.tool, part.state.metadata) : [],
+    )
+}
+
+function changes(tool: string, metadata: unknown): Change[] {
   if (tool === "apply_patch")
-    return Option.match(Schema.decodeUnknownOption(PatchResult)(metadata), {
-      onNone: () => 0,
-      onSome: (result) => result.files.reduce((total, file) => total + file.additions + file.deletions, 0),
+    return Option.match(Schema.decodeUnknownOption(PatchDiff)(metadata), {
+      onNone: () => [],
+      onSome: (result) =>
+        result.files.map((file) => ({
+          file: file.movePath ?? file.filePath,
+          status: file.type === "add" ? "added" : file.type === "delete" ? "deleted" : "modified",
+          additions: file.additions,
+          deletions: file.deletions,
+          patch: file.patch,
+        })),
     })
-  return Option.match(Schema.decodeUnknownOption(EditResult)(metadata), {
-    onNone: () => 0,
-    onSome: (result) => result.filediff.additions + result.filediff.deletions,
+  if (!EDIT_TOOLS.has(tool)) return []
+  return Option.match(Schema.decodeUnknownOption(EditDiff)(metadata), {
+    onNone: () => [],
+    onSome: (result) => [
+      {
+        file: result.filediff.file,
+        status: result.exists === false ? "added" : "modified",
+        additions: result.filediff.additions,
+        deletions: result.filediff.deletions,
+        patch: result.filediff.patch,
+      },
+    ],
   })
 }
 
@@ -228,7 +486,7 @@ function record(part: SessionV1.Part) {
   return Option.getOrUndefined(Schema.decodeUnknownOption(Info)(part.state.metadata))
 }
 
-// A finished checkpoint starts a new step; a stopped one counts too, since the user saw its diff.
+// A finished checkpoint starts a new review; a stopped one counts too, since the user saw its diff.
 function resets(part: SessionV1.Part) {
   if (part.type !== "tool" || part.tool !== "checkpoint") return false
   return part.state.status === "completed" || record(part)?.decision === "stop"
