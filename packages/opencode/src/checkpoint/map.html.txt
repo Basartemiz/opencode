@@ -131,6 +131,7 @@ section.part { margin: 0 0 38px; }
 .row.folder .name { font-weight: 700; }
 .row.plain .name { color: var(--muted); }
 .row .count { margin-left: auto; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.row .count .counts { font-size: 0.72rem; }
 .badge { flex: none; font: 700 0.66rem var(--sans); border-radius: 4px; padding: 1px 5px; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge.added { color: var(--add); background: var(--add-bg); }
 .badge.modified { color: var(--mod); background: var(--mod-bg); }
@@ -197,7 +198,7 @@ section.part { margin: 0 0 38px; }
 (() => {
   "use strict"
   const base = location.pathname.replace(/\/$/, "")
-  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined }
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined }
   // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
   let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
   const DECISIONS = {
@@ -380,14 +381,16 @@ section.part { margin: 0 0 38px; }
       page.append(el("p", "empty", "No checkpoint yet. The map fills in when the agent finishes its first feature."))
       return
     }
-    if (!state.file || !known(state.file, list)) state.file = entry.files[0] && entry.files[0].file
+    // Each checkpoint opens on its own first changed file.
+    if (state.at !== key(entry) || !state.file || !known(state.file, list)) state.file = entry.files[0] && entry.files[0].file
+    state.at = key(entry)
     page.append(pills(list), hero(entry))
     if (entry.overview) {
       const big = part("The big picture", tag("claim"))
       big.append(inline(el("p", "prose"), entry.overview))
       page.append(big)
     }
-    append(page, machine(entry, data.project), risks(entry), project(entry, list, data.project))
+    append(page, machine(entry, data.project), risks(entry), project(entry, data.project))
     if (entry.check) {
       const tryIt = part("How to try it", tag("claim"))
       tryIt.append(append(el("div", "try"), inline(el("p"), entry.check)))
@@ -628,19 +631,12 @@ section.part { margin: 0 0 38px; }
     return section
   }
 
-  // The whole project as a tree, with the files this session changed marked. Clicking a file shows what changed and why.
-  function project(entry, list, files) {
+  // The whole project as a tree, with the files this checkpoint changed marked. Clicking a file shows what changed and why.
+  // Files that changed in other checkpoints look like any other file here, so each checkpoint shows only its own step.
+  function project(entry, files) {
     const section = part("The project", tag("fact", "files and changes computed from the code"))
     section.id = "project"
-    const changes = new Map()
-    list.forEach((item) =>
-      item.files.forEach((file) => {
-        const seen = changes.get(file.file) || { touched: [] }
-        seen.touched.push(item)
-        seen.status = file.status
-        changes.set(file.file, seen)
-      }),
-    )
+    const changes = new Map(entry.files.map((file) => [file.file, file]))
     const risky = new Map((entry.affected || []).map((item) => [item.file, item]))
     const all = [...new Set([...files, ...changes.keys(), ...risky.keys()])].sort()
     const marked = all.filter((file) => changes.has(file) || risky.has(file))
@@ -671,7 +667,7 @@ section.part { margin: 0 0 38px; }
     tree.append(tools, branch(root, changes, risky, entry))
     if (files.length >= 3000) tree.append(el("p", "muted", "This project is large, so only part of it is listed."))
     const details = el("div", "details")
-    detail(details, entry, list, changes, risky)
+    detail(details, entry, changes, risky)
     section.append(append(el("div", "project"), tree, details))
     if (entry.unmatched && entry.unmatched.length) {
       section.append(
@@ -710,13 +706,12 @@ section.part { margin: 0 0 38px; }
       append(row, el("span", "caret", ""), el("span", "name", file.split("/").at(-1)))
       if (change) row.append(el("span", "badge " + change.status, STATUS[change.status]))
       if (risky.has(file)) row.append(el("span", "badge affected", "may be affected"))
-      if (change) row.append(el("span", "count", change.touched.map(short).join(" · ")))
+      if (change) row.append(append(el("span", "count"), counts(change.additions, change.deletions)))
       row.title = file
       row.addEventListener("click", () => pick(file))
       holder.append(row)
-      // The functions and classes the checkpoint shown above changed in this file; each opens the diff where it changed.
-      const record = entry.files.find((item) => item.file === file)
-      const symbols = (record && record.symbols) || []
+      // The functions and classes this checkpoint changed in the file; each opens the diff where it changed.
+      const symbols = (change && change.symbols) || []
       if (!symbols.length) return
       const parts = el("div", "children")
       symbols.slice(0, MAX_SYMBOLS).forEach((symbol, index) => {
@@ -732,26 +727,24 @@ section.part { margin: 0 0 38px; }
   }
 
   // What changed in the picked file and why: the agent's note next to the lines from the diff.
-  function detail(details, entry, list, changes, risky) {
+  function detail(details, entry, changes, risky) {
     const file = state.file
     if (!file) return details.append(el("p", "muted", "Click a file to see what changed in it and why."))
-    const change = changes.get(file)
-    const holder = (change && (change.touched.includes(entry) ? entry : change.touched.at(-1))) || undefined
-    const record = holder && holder.files.find((item) => item.file === file)
+    const record = changes.get(file)
+    const id = key(entry) + ":" + file
     const title = append(el("h3", "path"), document.createTextNode(file))
     if (record) title.append(el("span", "badge " + record.status, STATUS[record.status]), counts(record.additions, record.deletions))
     details.append(title)
     const risk = risky.get(file)
-    if (!record && !risk) details.append(el("p", "muted", "This file was not changed in this session."))
+    if (!record && !risk) details.append(el("p", "muted", "Not changed in this checkpoint."))
     if (record) {
-      if (holder !== entry) details.append(el("p", "muted", "Changed in " + label(holder) + ": " + holder.title + ", not in the checkpoint shown above."))
       if (record.note)
         details.append(field("What it is", record.note.purpose), field("What changed and why", record.note.change))
       else details.append(el("p", "muted", "The agent wrote no note for this file."))
-      if (record.symbols && record.symbols.length) details.append(parts(record.symbols, key(holder) + ":" + file, file))
+      if (record.symbols && record.symbols.length) details.append(parts(record.symbols, id, file))
     }
     if (risk) details.append(warning(risk, entry))
-    const links = list.flatMap((item) => item.links || [])
+    const links = entry.links || []
     const near = (entry.affected || []).filter((item) => item.uses.includes(file)).map((item) => item.file)
     const uses = [...new Set(links.filter((link) => link.from === file).map((link) => link.to))]
     const users = [...new Set(links.filter((link) => link.to === file).map((link) => link.from))].filter((item) => !near.includes(item))
@@ -767,7 +760,7 @@ section.part { margin: 0 0 38px; }
       if (near.length) relations.append(append(el("span"), document.createTextNode("Unchanged files that use it"), ...chips(near)))
       details.append(relations)
     }
-    if (record) details.append(...diff(record, key(holder) + ":" + file))
+    if (record) details.append(...diff(record, id))
   }
 
   // The functions and classes the change touched in a file; each opens the diff where it changed.
