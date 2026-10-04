@@ -16,7 +16,7 @@ Parameters shown in the terminal:
 Parameters shown on the map page:
 - overview: the big picture in 2-4 sentences: what this change does and why
 - flow: how the program moves through your change, as a state machine: one arrow per step, in order, from the user's action to the result. Each arrow goes from one file to another (or stays in the same file) and has a short action. For example: user → src/index.js "runs the shop", src/index.js → src/checkout.js "asks receipt() for the receipt", src/checkout.js → src/cart.js "asks total() for the price", src/cart.js → src/cart.js "takes 10% off for SAVE10". Use 3-7 arrows.
-- notes: one note for each file you changed: its path relative to the project, what the file is for, and what you changed in it and why
+- notes: one note for each file you changed since the last checkpoint, and no others: its path relative to the project, what the file is for, and what you changed in it and why. OpenCode checks your notes against the real diff. If they do not match, it sends you the real changes and asks you to describe them instead.
 - check: how the user can try the change: a command to run or what to click, and what they should see
 
 The result tells you what the user decided:

@@ -393,6 +393,7 @@ describe("Checkpoint.stats", () => {
         [
           stepStart("s0"),
           edit("a.ts", 3, 1),
+          tool("checkpoint", failed(undefined, "Checkpoint sent back: your explanation does not match")),
           tool("checkpoint", completed({ ...timed({ number: 1, decision: "revise" }, 2_000, 5_000), comment: "No" })),
           edit("a.ts", 1, 0),
           tool("edit", failed(undefined, "Checkpoint required: you changed 6 files")),
@@ -421,7 +422,15 @@ describe("Checkpoint.stats", () => {
       waitingMs: 8_000,
       workingMs: 6_000,
     })
-    expect(result.checkpoints).toEqual({ total: 3, approved: 1, revised: 1, stopped: 1, auto: 0, forced: 1 })
+    expect(result.checkpoints).toEqual({
+      total: 3,
+      approved: 1,
+      revised: 1,
+      stopped: 1,
+      auto: 0,
+      forced: 1,
+      sentBack: 1,
+    })
     expect(
       result.waits.map((wait) => [wait.number, wait.revision, wait.decision, wait.waitedMs, wait.comment]),
     ).toEqual([
@@ -443,7 +452,15 @@ describe("Checkpoint.stats", () => {
 
     expect(result.agents).toEqual(["build"])
     expect(result.run).toEqual({ started: 1_000, finished: 4_000, totalMs: 3_000, waitingMs: 0, workingMs: 3_000 })
-    expect(result.checkpoints).toEqual({ total: 0, approved: 0, revised: 0, stopped: 0, auto: 0, forced: 0 })
+    expect(result.checkpoints).toEqual({
+      total: 0,
+      approved: 0,
+      revised: 0,
+      stopped: 0,
+      auto: 0,
+      forced: 0,
+      sentBack: 0,
+    })
     expect(result.changes).toEqual({ edits: 1, files: 1, additions: 4, deletions: 0 })
   })
 })
@@ -691,4 +708,92 @@ describe("Checkpoint.gate", () => {
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Checkpoint.BlockedError)
     }),
   )
+})
+
+describe("Checkpoint.mismatch", () => {
+  const note = (file: string) => ({ file, purpose: "Holds part of the shop.", change: "Changed for discounts." })
+
+  test("finds notes about files that did not change, and changed files without a note", () => {
+    expect(
+      Checkpoint.mismatch(
+        [note("./src/cart.js"), note("src/checkout.js")],
+        [{ file: "src/cart.js" }, { file: "src/index.js" }],
+      ),
+    ).toEqual({ stray: ["src/checkout.js"], missing: ["src/index.js"] })
+  })
+
+  test("finds nothing when the notes cover exactly the changed files", () => {
+    expect(Checkpoint.mismatch([note("cart.js")], [{ file: "src/cart.js" }])).toEqual({ stray: [], missing: [] })
+  })
+})
+
+describe("Checkpoint.sentBack", () => {
+  const back = tool("checkpoint", failed(undefined, "Checkpoint sent back: your explanation does not match"))
+
+  test("tells whether the agent was already sent back to fix this checkpoint", () => {
+    expect(Checkpoint.sentBack([user(), assistant("understand", [stepStart(), edit("a.ts", 1, 0)])])).toBe(false)
+    expect(Checkpoint.sentBack([user(), assistant("understand", [stepStart(), edit("a.ts", 1, 0), back])])).toBe(true)
+  })
+
+  test("starts over after a checkpoint the user answered", () => {
+    const answered = tool("checkpoint", completed(record({ number: 1, decision: "approve" })))
+
+    expect(Checkpoint.sentBack([user(), assistant("understand", [back, answered, edit("a.ts", 1, 0)])])).toBe(false)
+  })
+})
+
+describe("Checkpoint.MismatchError", () => {
+  test("tells the agent which notes are wrong and shows it what really changed", () => {
+    const error = new Checkpoint.MismatchError({
+      stray: ["src/cart.js"],
+      missing: ["src/index.js"],
+      changes: Checkpoint.facts([
+        {
+          file: "src/index.js",
+          status: "modified",
+          additions: 2,
+          deletions: 1,
+          patch: patch(
+            "src/index.js",
+            "@@ -7 +7,2 @@",
+            "-console.log(receipt(cart))",
+            "+const code = 'SAVE10'",
+            "+console.log(receipt(cart, code))",
+          ),
+          symbols: [{ name: "code", kind: "variable", change: "added", start: 7, end: 7 }],
+        },
+        {
+          file: "src/receipt.js",
+          status: "added",
+          additions: 12,
+          deletions: 0,
+          patch: patch(
+            "src/receipt.js",
+            "@@ -0,0 +1,12 @@",
+            ...Array.from({ length: 12 }, (_, index) => `+line ${index + 1}`),
+          ),
+          symbols: [{ name: "format", kind: "function", change: "added", start: 1, end: 12 }],
+        },
+      ]),
+    })
+
+    expect(error.message).toBe(
+      [
+        "Checkpoint sent back: your explanation does not match what changed since the last checkpoint, so the user has not seen it yet.",
+        "You wrote notes about files that did not change since the last checkpoint: src/cart.js.",
+        "You wrote no note for these changed files: src/index.js.",
+        "",
+        "What changed since the last checkpoint:",
+        "- src/index.js: changed, +2 -1; code (new)",
+        "    - console.log(receipt(cart))",
+        "    + const code = 'SAVE10'",
+        "    + console.log(receipt(cart, code))",
+        "- src/receipt.js: new file, +12; format() (new)",
+        ...Array.from({ length: 8 }, (_, index) => `    + line ${index + 1}`),
+        "    … 4 more changed lines",
+        "",
+        "Call checkpoint again and describe only these changes: rewrite the title, steps, impact, overview, flow, and notes, with one note for each changed file.",
+      ].join("\n"),
+    )
+  })
 })

@@ -1,5 +1,6 @@
 import { Effect, Option, Schema } from "effect"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import { CheckpointLinks } from "./links"
 
 const EDIT_TOOLS = new Set(["edit", "write", "apply_patch"])
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
@@ -11,6 +12,10 @@ const ROW_WIDTH = 76
 const MAX_ROWS = 3
 // Agents sometimes number their own steps; the summary numbers them itself.
 const STEP_MARKER = /^\s*(?:\d+[.)]|[-*•])\s+/
+// Starts the error that sends a checkpoint back to the agent, so the next call can tell it was sent back already.
+const SENT_BACK = "Checkpoint sent back"
+// The agent sees this many changed lines of each file when its explanation is sent back.
+const SAMPLE_LINES = 8
 
 export const Limits = Schema.Struct({
   files: Schema.Finite,
@@ -138,6 +143,29 @@ export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Check
   }
 }
 
+// The agent's notes describe other files than the ones that changed, so the user is not asked yet: the agent gets
+// the real changes and one more try.
+export class MismatchError extends Schema.TaggedErrorClass<MismatchError>()("CheckpointMismatchError", {
+  stray: Schema.Array(Schema.String),
+  missing: Schema.Array(Schema.String),
+  changes: Schema.String,
+}) {
+  override get message() {
+    return [
+      `${SENT_BACK}: your explanation does not match what changed since the last checkpoint, so the user has not seen it yet.`,
+      ...(this.stray.length
+        ? [`You wrote notes about files that did not change since the last checkpoint: ${this.stray.join(", ")}.`]
+        : []),
+      ...(this.missing.length ? [`You wrote no note for these changed files: ${this.missing.join(", ")}.`] : []),
+      "",
+      "What changed since the last checkpoint:",
+      this.changes,
+      "",
+      "Call checkpoint again and describe only these changes: rewrite the title, steps, impact, overview, flow, and notes, with one note for each changed file.",
+    ].join("\n")
+  }
+}
+
 export function hunks(patch: string): Hunk[] {
   return blocks(patch).map((block) => ({
     before: block.before,
@@ -261,6 +289,7 @@ export function stats(messages: SessionV1.WithParts[]) {
           part.state.status === "error" &&
           part.state.error.includes("Checkpoint required"),
       ).length,
+      sentBack: tools.filter(returned).length,
     },
     waits,
     changes: {
@@ -290,6 +319,44 @@ export function baseline(messages: SessionV1.WithParts[], agent: string) {
     if (message.info.agent !== agent) return undefined
     return found ?? message.parts.find((part): part is SessionV1.StepStartPart => part.type === "step-start")?.snapshot
   }, undefined)
+}
+
+// Where the agent's notes and the diff disagree: notes about files that did not change, and changed files without a note.
+export function mismatch(notes: readonly Note[], files: readonly Pick<File, "file">[]) {
+  return {
+    stray: notes
+      .filter((note) => !files.some((file) => CheckpointLinks.same(note.file, file.file)))
+      .map((note) => note.file),
+    missing: files
+      .filter((file) => !notes.some((note) => CheckpointLinks.same(note.file, file.file)))
+      .map((file) => file.file),
+  }
+}
+
+// Whether the agent was already sent back to fix its explanation of the changes since the last checkpoint.
+export function sentBack(messages: SessionV1.WithParts[]) {
+  const parts = messages.flatMap((message) => message.parts)
+  return parts.slice(parts.findLastIndex(resets) + 1).some(returned)
+}
+
+// The changes since the last checkpoint as the agent reads them when its explanation is sent back: each file with
+// its line counts and the parts it changed, then its first changed lines.
+export function facts(
+  files: readonly Pick<File, "file" | "status" | "additions" | "deletions" | "patch" | "symbols">[],
+) {
+  return files
+    .flatMap((file) => {
+      const lines = blocks(file.patch ?? "").flatMap((block) => block.lines.filter((line) => line.kind !== "same"))
+      const parts = (file.symbols ?? []).map((symbol) => `${named(symbol)} (${CHANGE[symbol.change]})`)
+      return [
+        `- ${file.file}: ${WORD[file.status]}, ${counts(file.additions, file.deletions)}${parts.length ? `; ${parts.join(", ")}` : ""}`,
+        ...lines
+          .slice(0, SAMPLE_LINES)
+          .map((line) => `    ${line.kind === "add" ? "+" : "-"} ${line.text.slice(0, 160)}`),
+        ...(lines.length > SAMPLE_LINES ? [`    … ${lines.length - SAMPLE_LINES} more changed lines`] : []),
+      ]
+    })
+    .join("\n")
 }
 
 // The text the user reviews in the terminal: the agent's claims, then the facts from the diff, kept to one screen.
@@ -330,6 +397,16 @@ export function label(input: Pick<Info, "number" | "revision">) {
 }
 
 const STATUS = { added: "A", deleted: "D", modified: "M" } as const
+const WORD = { added: "new file", deleted: "deleted", modified: "changed" } as const
+const CHANGE = { added: "new", changed: "changed", removed: "removed" } as const
+
+// A function as "total()", a method as "Cart.total()", and a class or type with its kind.
+function named(symbol: Symbol) {
+  if (symbol.kind === "method") return `${symbol.parent ? `${symbol.parent}.` : ""}${symbol.name}()`
+  if (symbol.kind === "function") return `${symbol.name}()`
+  if (symbol.kind === "class" || symbol.kind === "type") return `${symbol.kind} ${symbol.name}`
+  return symbol.name
+}
 
 function counts(additions: number, deletions: number) {
   if (!deletions) return `+${additions}`
@@ -484,6 +561,16 @@ function record(part: SessionV1.Part) {
   if (part.type !== "tool" || part.tool !== "checkpoint") return
   if (part.state.status !== "completed" && part.state.status !== "error") return
   return Option.getOrUndefined(Schema.decodeUnknownOption(Info)(part.state.metadata))
+}
+
+// A checkpoint the tool sent back to the agent because its explanation did not match the changes.
+function returned(part: SessionV1.Part) {
+  return (
+    part.type === "tool" &&
+    part.tool === "checkpoint" &&
+    part.state.status === "error" &&
+    part.state.error.includes(SENT_BACK)
+  )
 }
 
 // A finished checkpoint starts a new review; a stopped one counts too, since the user saw its diff.

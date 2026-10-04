@@ -123,6 +123,10 @@ export const CheckpointTool = Tool.define(
             symbols: symbols[index],
             patch: file.patch && file.patch.length <= MAX_PATCH ? file.patch : undefined,
           }))
+          // An explanation of other files than the ones that changed goes back to the agent once, with the real changes.
+          const wrong = Checkpoint.mismatch(params.notes, files)
+          if ((wrong.stray.length || wrong.missing.length) && !Checkpoint.sentBack(messages))
+            return yield* new Checkpoint.MismatchError({ ...wrong, changes: Checkpoint.facts(files) })
           const changed = files.filter((file) => file.status !== "deleted").map((file) => file.file)
           const links = yield* CheckpointLinks.find(fs, root, [
             ...new Set([...changed, ...CheckpointLinks.mentioned(params.flow, changed)]),

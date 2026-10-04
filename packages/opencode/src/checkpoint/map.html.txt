@@ -867,6 +867,7 @@ section.part { margin: 0 0 38px; }
       [stats.checkpoints.revised, "revisions asked"],
       [stats.checkpoints.stopped, "stopped"],
       [stats.checkpoints.forced, "forced by the safety net"],
+      [stats.checkpoints.sentBack, "explanations sent back to the agent"],
       [duration(stats.run.waitingMs), "your review time"],
       [duration(stats.run.totalMs), "total time"],
       [stats.changes.files, "files changed"],

@@ -2578,8 +2578,11 @@ function Question(props: ToolProps) {
 // One line per checkpoint: the review itself is in the question panel and on the map page.
 function Checkpoint(props: ToolProps) {
   const label = createMemo(() => formatCheckpoint(props.input, props.metadata))
+  const failure = createMemo(() =>
+    props.part.state.status === "error" ? formatCheckpointError(props.part.state.error) : undefined,
+  )
   return (
-    <InlineTool icon="◆" pending="Preparing checkpoint…" complete={label()} part={props.part}>
+    <InlineTool icon="◆" pending="Preparing checkpoint…" complete={label()} failure={failure()} part={props.part}>
       {label()}
     </InlineTool>
   )
@@ -2603,6 +2606,15 @@ export function formatCheckpoint(input: Record<string, unknown>, metadata: Recor
   ]
     .filter(Boolean)
     .join(" · ")
+}
+
+// A checkpoint that did not reach the user, in one line; the full error opens on click.
+export function formatCheckpointError(error: string) {
+  if (error.includes("Checkpoint sent back"))
+    return "Checkpoint sent back: the agent's notes did not match the changes, so it is rewriting them"
+  if (error.includes("invalid arguments"))
+    return "Checkpoint incomplete: the agent left out a part of its explanation and is trying again"
+  return "Checkpoint failed"
 }
 
 function Skill(props: ToolProps) {

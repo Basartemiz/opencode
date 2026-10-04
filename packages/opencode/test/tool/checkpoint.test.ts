@@ -59,6 +59,11 @@ const params = {
   check: "Run main.ts and look for hello.",
 }
 
+const explain = (...files: string[]) => ({
+  ...params,
+  notes: files.map((file) => ({ file, purpose: "Holds part of the program.", change: "Changed for this test." })),
+})
+
 const write = (file: string, content: string) =>
   Effect.gen(function* () {
     const instance = yield* TestInstance
@@ -160,8 +165,9 @@ it.instance(
       const turn = yield* start()
       yield* write("src/greet.ts", "export function greet() {\n  return 'hello'\n}\n")
       yield* write("src/main.ts", "import { greet } from './greet'\n")
+      const input = { ...params, notes: [...params.notes, ...explain("src/main.ts").notes] }
 
-      const { asked, exit } = yield* review(turn, "Approve")
+      const { asked, exit } = yield* review(turn, "Approve", [], input)
 
       expect(asked.questions[0].header).toBe("Checkpoint 1")
       expect(asked.questions[0].question).toContain("src/greet.ts")
@@ -175,7 +181,7 @@ it.instance(
       expect(info.steps).toEqual(params.steps)
       expect(info.overview).toBe(params.overview)
       expect(info.flow).toEqual(params.flow)
-      expect(info.notes).toEqual(params.notes)
+      expect(info.notes).toEqual(input.notes)
       expect(info.check).toBe(params.check)
       // Computed from the import lines, so the map can draw which file uses which.
       expect(info.links).toEqual([{ from: "src/main.ts", to: "src/greet.ts" }])
@@ -224,7 +230,7 @@ it.instance(
       const turn = yield* start()
       yield* write("src/cart.js", "export function total(items) {\n  return items.length * 2\n}\n")
 
-      const { exit } = yield* review(turn, "Approve")
+      const { exit } = yield* review(turn, "Approve", [], explain("src/cart.js"))
 
       if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
       const info = decode(exit.value.metadata)
@@ -240,6 +246,64 @@ it.instance(
           ],
         },
       ])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "sends the explanation back to the agent once, with the real changes, when its notes do not match them",
+  () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const turn = yield* start()
+      yield* write("src/index.ts", "export const code = 'SAVE10'\n")
+      const info = yield* CheckpointTool
+      const tool = yield* info.init()
+
+      const exit = yield* tool.execute(params, context(turn)).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+      expect(error).toBeInstanceOf(Checkpoint.MismatchError)
+      if (error instanceof Checkpoint.MismatchError) {
+        expect(error.message).toContain("notes about files that did not change since the last checkpoint: src/greet.ts")
+        expect(error.message).toContain("no note for these changed files: src/index.ts")
+        expect(error.message).toContain("- src/index.ts: new file, +1; code (new)")
+        expect(error.message).toContain("    + export const code = 'SAVE10'")
+      }
+      // The user is not asked about an explanation that does not match the changes.
+      expect(yield* question.list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "shows the checkpoint to the user when the agent's second try still does not match",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const turn = yield* start()
+      yield* write("src/index.ts", "export const code = 'SAVE10'\n")
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        sessionID: turn.sessionID,
+        messageID: turn.messageID,
+        type: "tool",
+        tool: "checkpoint",
+        callID: "call_sent_back",
+        state: {
+          status: "error",
+          input: params,
+          error: "Checkpoint sent back: your explanation does not match what changed since the last checkpoint.",
+          time: { start: 0, end: 0 },
+        },
+      })
+
+      const { asked, exit } = yield* review(turn, "Approve")
+
+      expect(asked.questions[0].header).toBe("Checkpoint 1")
+      if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
+      expect(decode(exit.value.metadata).files.map((file) => file.file)).toEqual(["src/index.ts"])
     }),
   { git: true },
 )
@@ -286,7 +350,7 @@ it.instance(
       const sessions = yield* Session.Service
       const turn = yield* start()
       yield* write("first.ts", "export const first = 1\n")
-      const first = yield* review(turn, "Approve")
+      const first = yield* review(turn, "Approve", [], explain("first.ts"))
       if (!Exit.isSuccess(first.exit)) throw new Error("checkpoint failed")
       yield* sessions.updatePart({
         id: PartID.ascending(),
@@ -297,7 +361,7 @@ it.instance(
         callID: "call_first",
         state: {
           status: "completed",
-          input: params,
+          input: explain("first.ts"),
           output: first.exit.value.output,
           title: first.exit.value.title,
           metadata: first.exit.value.metadata,
@@ -306,7 +370,7 @@ it.instance(
       })
       yield* write("second.ts", "export const second = 2\n")
 
-      const second = yield* review(turn, "Approve")
+      const second = yield* review(turn, "Approve", [], explain("second.ts"))
 
       expect(second.asked.questions[0].header).toBe("Checkpoint 2")
       if (!Exit.isSuccess(second.exit)) throw new Error("checkpoint failed")

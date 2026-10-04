@@ -2592,6 +2592,49 @@ it.instance(
 )
 
 it.instance(
+  "a checkpoint whose notes miss the changed files goes back to the agent with the real changes before the user sees it",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const explanation = {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
+        check: "Open greet.txt.",
+      }
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", {
+        ...explanation,
+        notes: [{ file: "farewell.txt", purpose: "Says goodbye.", change: "New file." }],
+      })
+      yield* llm.tool("checkpoint", {
+        ...explanation,
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+      })
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      const asked = yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+
+      expect(asked.questions[0]?.header).toBe("Checkpoint 1")
+      const checkpoints = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoints.map((part) => part.state.status)).toEqual(["error", "completed"])
+      // The agent read the real changes in the result of its first call, before it wrote the second one.
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(4)
+      expect(JSON.stringify(inputs[2])).toContain("Checkpoint sent back")
+      expect(JSON.stringify(inputs[2])).toContain("greet.txt: new file, +1")
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
   "stopping at a checkpoint ends the run",
   () =>
     Effect.gen(function* () {
