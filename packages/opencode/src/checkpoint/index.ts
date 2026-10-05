@@ -282,6 +282,11 @@ export function locate(messages: SessionV1.WithParts[], number: number, revision
   return listed(messages).findLast((item) => item.entry.number === number && item.entry.revision === revision)
 }
 
+// The checkpoint waiting for the user's decision, if there is one, with the tool part that asks for it.
+export function waiting(messages: SessionV1.WithParts[]) {
+  return listed(messages).findLast((item) => item.entry.status === "waiting")
+}
+
 // Measures a session for a user study, so understand-mode runs can be compared with build-mode runs of similar tasks.
 export function stats(messages: SessionV1.WithParts[]) {
   const assistants = messages.flatMap((message) => (message.info.role === "assistant" ? [message.info] : []))

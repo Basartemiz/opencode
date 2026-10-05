@@ -224,6 +224,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 .answer p { margin: 0; }
 .answer .said { border-left: 3px solid var(--claim); padding: 2px 0 2px 10px; }
 .answer .failed { color: var(--del); }
+.answer .sent { color: var(--add); font-weight: 600; }
 .ask { display: flex; gap: 8px; }
 .ask input { flex: 1; min-width: 0; font: inherit; font-size: 0.88rem; padding: 5px 9px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--ink); }
 </style>
@@ -240,8 +241,9 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
   "use strict"
   const base = location.pathname.replace(/\/$/, "")
   // `panel` is the file the flowchart's side panel shows, and `step` the arrow that opened it. `threads` holds the
-  // model's explanations of a file or a change, `shown` the ones open, and `drafts` what the user is typing.
-  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false, threads: new Map(), shown: new Set(), drafts: new Map(), stale: false }
+  // model's explanations of a file or a change, `shown` the ones open, `forms` the requests to the agent about a
+  // change, and `drafts` what the user is typing.
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false, threads: new Map(), shown: new Set(), forms: new Map(), drafts: new Map(), stale: false }
   // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
   let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
   const DECISIONS = {
@@ -631,8 +633,11 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     // A changed file can be explained as a whole, and each of its changes on its own.
     if (record) append(box, append(el("div", "tools"), explainer(entry, id)), state.shown.has(topic(entry, id)) ? explanation(entry, id) : undefined)
     const tools = (block, index) => ({
-      buttons: [explainer(entry, id, index)],
-      rows: state.shown.has(topic(entry, id, index)) ? [extra(explanation(entry, id, index))] : [],
+      buttons: [explainer(entry, id, index), asker(entry, id, index, "revert"), asker(entry, id, index, "change")],
+      rows: [
+        state.shown.has(topic(entry, id, index)) ? extra(explanation(entry, id, index)) : undefined,
+        state.forms.has(topic(entry, id, index)) ? extra(compose(entry, id, index)) : undefined,
+      ].filter(Boolean),
     })
     // Links in the panel open the other file in the panel too.
     const go = (file) => (file === state.panel ? render() : show(file))
@@ -683,6 +688,88 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     } catch {
       item.status = "failed"
       item.text = "The map could not reach OpenCode. Is it still running?"
+    }
+    refresh()
+  }
+
+  // "Revert this" and "Ask for a change": the button that opens the box for a request to the agent about one change.
+  function asker(entry, file, chunk, action) {
+    const target = topic(entry, file, chunk)
+    const form = state.forms.get(target)
+    const open = Boolean(form && form.action === action && form.status !== "sent")
+    const button = el("button", "tool" + (open ? " on" : ""), action === "revert" ? "Revert this" : "Ask for a change")
+    button.addEventListener("click", () => {
+      if (open) state.forms.delete(target)
+      else state.forms.set(target, { action, status: "editing" })
+      render()
+    })
+    return button
+  }
+
+  // The box for a request to the agent about one change. OpenCode puts where the change is in front of what the user
+  // writes; the page itself never edits files.
+  function compose(entry, file, chunk) {
+    const target = topic(entry, file, chunk)
+    const form = state.forms.get(target)
+    const box = el("div", "answer")
+    if (form.status === "sent") {
+      const how = form.via === "revision" ? "as your answer to the checkpoint that was waiting" : "as a new message in this session"
+      box.append(el("p", "sent", "Sent to the agent " + how + "."), append(el("p"), document.createTextNode("“" + form.sent + "”")))
+      box.append(el("p", "muted", "The map shows what the agent changed at its next checkpoint."))
+      return box
+    }
+    const waiting = state.data.checkpoints.some((item) => item.status === "waiting")
+    box.append(
+      el(
+        "p",
+        "muted",
+        (form.action === "revert" ? "Ask the agent to undo this change. " : "Tell the agent what to change here. ") +
+          "OpenCode adds the file, the function, the lines, and the checkpoint. " +
+          (waiting ? "A checkpoint is waiting for your answer, so this becomes your revision request." : "It goes to the agent as a new message in this session."),
+      ),
+    )
+    if (form.status === "failed") box.append(el("p", "failed", form.error))
+    const draft = "send|" + target
+    const input = el("input")
+    input.type = "text"
+    input.maxLength = 2000
+    input.placeholder = form.action === "revert" ? "Anything to add? (optional)" : "What should change?"
+    input.setAttribute("aria-label", input.placeholder)
+    input.value = state.drafts.get(draft) || ""
+    input.addEventListener("input", () => state.drafts.set(draft, input.value))
+    const button = el("button", "button", form.status === "sending" ? "Sending…" : "Send to the agent")
+    button.type = "submit"
+    button.disabled = form.status === "sending"
+    const ask = el("form", "ask")
+    ask.addEventListener("submit", (event) => {
+      event.preventDefault()
+      if (form.action === "change" && !input.value.trim()) return input.focus()
+      send(entry, file, chunk, form.action, input.value.trim())
+    })
+    box.append(append(ask, input, button))
+    return box
+  }
+
+  async function send(entry, file, chunk, action, text) {
+    const target = topic(entry, file, chunk)
+    const form = { action, status: "sending" }
+    state.forms.set(target, form)
+    render()
+    try {
+      const response = await fetch(base + "/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ number: entry.number, revision: entry.revision, file, chunk, action, text: text || undefined }),
+      })
+      const body = await response.json()
+      form.status = response.ok ? "sent" : "failed"
+      form.via = body.via
+      form.sent = body.sent
+      form.error = body.error || "OpenCode did not take the request."
+      if (response.ok) state.drafts.delete("send|" + target)
+    } catch {
+      form.status = "failed"
+      form.error = "The map could not reach OpenCode. Is it still running?"
     }
     refresh()
   }

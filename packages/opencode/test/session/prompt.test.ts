@@ -2743,6 +2743,92 @@ it.instance(
   15_000,
 )
 
+const greeting = {
+  title: "Add greeting",
+  steps: ["I wrote greet.txt with a greeting."],
+  impact: "Adds one file.",
+  overview: "There is a greeting file now.",
+  notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+  check: "Open greet.txt.",
+}
+
+it.instance(
+  "a revert asked for on the map answers the waiting checkpoint as a revision request, which the agent reads",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const question = yield* Question.Service
+      const maps = yield* CheckpointMap.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", greeting)
+      yield* llm.text(flowAnswer)
+      yield* llm.text("done")
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* pollWithTimeout(question.list().pipe(Effect.map((items) => items[0])), "checkpoint never asked", "10 seconds")
+
+      const url = new URL(yield* maps.url(sessionID))
+      const change = { number: 1, revision: 1, file: "greet.txt", chunk: 0, action: "revert" }
+      const sent = yield* fromMap(url, "send", change)
+      yield* Fiber.join(loop)
+
+      const message = "In greet.txt, line 1 (checkpoint 1): revert this change."
+      expect(sent).toEqual({ status: 200, body: { via: "revision", sent: message } })
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      const metadata = checkpoint?.state.status === "completed" ? checkpoint.state.metadata : undefined
+      expect([metadata?.decision, metadata?.comment]).toEqual(["revise", message])
+      // The agent read the request in the checkpoint's result.
+      expect(JSON.stringify((yield* llm.inputs)[3])).toContain(message)
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "a change asked for on the map after the run reaches the agent as a new message in the same session",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const maps = yield* CheckpointMap.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", greeting)
+      yield* llm.text(flowAnswer)
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+      yield* llm.text("I will say hi instead.")
+
+      const url = new URL(yield* maps.url(sessionID))
+      const change = { number: 1, revision: 1, file: "greet.txt", chunk: 0, action: "change", text: "Say hi instead." }
+      const sent = yield* fromMap(url, "send", change)
+
+      const message = "In greet.txt, line 1 (checkpoint 1): Say hi instead."
+      expect(sent).toEqual({ status: 200, body: { via: "message", sent: message } })
+      // The agent answers it like a message typed in the terminal, in understand mode.
+      yield* pollWithTimeout(
+        sessions.messages({ sessionID }).pipe(
+          Effect.map((messages) =>
+            messages.find((item) => item.parts.some((part) => part.type === "text" && part.text === "I will say hi instead.")),
+          ),
+        ),
+        "the agent never answered the message from the map",
+        "10 seconds",
+      )
+      const asked = (yield* sessions.messages({ sessionID })).findLast((item) => item.info.role === "user")
+      expect(asked?.info.role === "user" ? asked.info.agent : undefined).toBe("understand")
+      expect(asked?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))).toEqual([message])
+      expect(JSON.stringify((yield* llm.inputs)[4])).toContain(message)
+    }),
+  { git: true },
+  15_000,
+)
+
 it.instance(
   "stopping at a checkpoint ends the run",
   () =>

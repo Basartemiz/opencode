@@ -1,17 +1,20 @@
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Clock, Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Context, Effect, Layer, Option, Schema, Scope } from "effect"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Agent } from "@/agent/agent"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
+import { Question } from "@/question"
 import { LLM } from "@/session/llm"
+import type { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Checkpoint } from "."
 import { CheckpointExplain } from "./explain"
+import { CheckpointFeedback } from "./feedback"
 import { CheckpointLinks } from "./links"
 import { CheckpointSymbols } from "./symbols"
 import PAGE from "./map.html.txt"
@@ -36,8 +39,23 @@ const Explain = Schema.Struct({
 })
 type Explain = typeof Explain.Type
 
+// What the page sends to ask the agent to revert one change, or to change it as the user says.
+const Send = Schema.Struct({
+  number: Schema.Finite,
+  revision: Schema.Finite,
+  file: Schema.String,
+  chunk: Schema.Finite,
+  action: Schema.Literals(["revert", "change"]),
+  text: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
+})
+type Send = typeof Send.Type
+
 // What the server answers a request from the page: a status and a JSON body.
 type Outcome = { status: number; body: Record<string, unknown> }
+
+// How a request from the page reaches the agent when no checkpoint is waiting: the session prompt, which
+// prompt_async uses too.
+export type Prompt = (input: SessionPrompt.PromptInput) => Effect.Effect<unknown>
 // The page only talks to this server, and it inserts everything it shows as text.
 const PAGE_HEADERS = {
   ...HEADERS,
@@ -47,8 +65,9 @@ const PAGE_HEADERS = {
 }
 
 export interface Interface {
-  // The private link to one session's map page. The first call starts the map server for this project.
-  readonly url: (sessionID: SessionID) => Effect.Effect<string>
+  // The private link to one session's map page. The first call starts the map server for this project. With `prompt`,
+  // the page's requests can reach the session's agent as new messages; the checkpoint tool passes the session's own.
+  readonly url: (sessionID: SessionID, prompt?: Prompt) => Effect.Effect<string>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/CheckpointMap") {}
@@ -61,7 +80,9 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
     const llm = yield* LLM.Service
+    const question = yield* Question.Service
     const listed = new Map<string, { at: number; files: string[] }>()
+    const prompts = new Map<SessionID, Prompt>()
     // Explanations by checkpoint, file, change, and question, so asking again shows the same answer without asking the
     // model again. Failed answers are not kept.
     const explained = new Map<string, Promise<Outcome>>()
@@ -120,6 +141,49 @@ const layer = Layer.effect(
         ),
       ),
     )
+    // A request about one change goes to the agent. When a checkpoint waits for the user, it is their answer, which the
+    // checkpoint tool reads as a revision request, as if typed in the terminal. Otherwise it is a new message in the
+    // session. The page never edits files itself.
+    const send = Effect.fn("CheckpointMap.send")(
+      function* (sessionID: SessionID, body: Send, scope: Scope.Scope) {
+        const messages = yield* sessions.messages({ sessionID })
+        const found = Checkpoint.locate(messages, body.number, body.revision)
+        const file = found?.entry.files.find((item) => item.file === body.file)
+        if (!found || !file || !Checkpoint.chunks(file.patch ?? "")[body.chunk])
+          return refuse(404, "That change is not in this checkpoint.")
+        const text = CheckpointFeedback.message({ ...body, checkpoint: found.entry, file })
+        if (!text) return refuse(400, "Say what should change.")
+        const open = Checkpoint.waiting(messages)
+        const asked = open
+          ? (yield* question.list()).find((item) => item.sessionID === sessionID && item.tool?.callID === open.part.callID)
+          : undefined
+        if (asked) {
+          yield* question.reply({ requestID: asked.id, answers: [[text]] })
+          return { status: 200, body: { via: "revision", sent: text } }
+        }
+        const prompt = prompts.get(sessionID)
+        const user = messages.findLast((message) => message.info.role === "user")?.info
+        if (!prompt || user?.role !== "user")
+          return refuse(503, "The map cannot reach this session's agent. Type the request in the terminal instead.")
+        // The session's own agent and model, so the message does not switch it to another mode.
+        yield* prompt({
+          sessionID,
+          agent: user.agent,
+          model: { providerID: user.model.providerID, modelID: user.model.modelID },
+          variant: user.model.variant,
+          parts: [{ type: "text", text }],
+        }).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("message from the map failed", { cause: Cause.pretty(cause) })),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+        return { status: 200, body: { via: "message", sent: text } }
+      },
+      Effect.catchCause((cause) =>
+        Effect.logWarning("send failed", { cause: Cause.pretty(cause) }).pipe(
+          Effect.as(refuse(500, "OpenCode could not pass the request on. Try again.")),
+        ),
+      ),
+    )
     const remember = (sessionID: SessionID, body: Explain, ask: () => Promise<Outcome>) => {
       const key = JSON.stringify([sessionID, body.number, body.revision, body.file, body.chunk, body.question?.trim()])
       const known = explained.get(key)
@@ -135,6 +199,8 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("CheckpointMap.state")(function* () {
         const bridge = yield* EffectBridge.make()
+        // Messages sent to the agent from the page run in the project's scope, as prompt_async runs them in the server's.
+        const scope = yield* Scope.Scope
         // A random secret in every link, so other programs on this computer cannot read the session.
         // It is short so the link fits on one line of the terminal, where it can be clicked.
         const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")
@@ -151,6 +217,7 @@ const layer = Layer.effect(
                   load: (sessionID) => bridge.promise(load(sessionID).pipe(Effect.option)),
                   explain: (sessionID, body) =>
                     remember(sessionID, body, () => bridge.promise(explain(sessionID, body))),
+                  send: (sessionID, body) => bridge.promise(send(sessionID, body, scope)),
                 }),
             }),
           ),
@@ -161,7 +228,8 @@ const layer = Layer.effect(
     )
 
     return Service.of({
-      url: Effect.fn("CheckpointMap.url")(function* (sessionID) {
+      url: Effect.fn("CheckpointMap.url")(function* (sessionID, prompt) {
+        if (prompt) prompts.set(sessionID, prompt)
         return `${yield* InstanceState.get(state)}/${sessionID}`
       }),
     })
@@ -171,7 +239,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Session.node, Ripgrep.node, Agent.node, Provider.node, LLM.node],
+  deps: [Session.node, Ripgrep.node, Agent.node, Provider.node, LLM.node, Question.node],
 })
 
 // What the map page shows for one session.
@@ -227,6 +295,7 @@ async function respond(
     origin: string
     load: (sessionID: SessionID) => Promise<Option.Option<ReturnType<typeof data>>>
     explain: (sessionID: SessionID, body: Explain) => Promise<Outcome>
+    send: (sessionID: SessionID, body: Send) => Promise<Outcome>
   },
 ) {
   const [key, id, kind] = new URL(request.url).pathname.split("/").slice(1)
@@ -236,6 +305,11 @@ async function respond(
     return write(request, input.origin, (text) => {
       const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Explain))(text))
       return body ? input.explain(sessionID, body) : Promise.resolve(refuse(400, "The map sent an unknown request."))
+    })
+  if (request.method === "POST" && kind === "send")
+    return write(request, input.origin, (text) => {
+      const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Send))(text))
+      return body ? input.send(sessionID, body) : Promise.resolve(refuse(400, "The map sent an unknown request."))
     })
   if (request.method !== "GET") return missing()
   if (kind === undefined) return new Response(PAGE, { headers: PAGE_HEADERS })

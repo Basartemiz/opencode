@@ -19,6 +19,7 @@ import { Session } from "../session/session"
 import { Snapshot } from "../snapshot"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
+import type { TaskPromptOps } from "./task"
 
 // The user waits for the flowchart before the checkpoint is shown, so a slow answer is given up on.
 const FLOW_WAIT = "45 seconds"
@@ -169,13 +170,15 @@ export const CheckpointTool = Tool.define(
           const interactive =
             (["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool) &&
             Permission.evaluate("question", "*", agent?.permission ?? [], session.permission ?? []).action !== "deny"
+          // The map page can send the user's requests to the agent as new messages, through the session's own prompt.
+          const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
           const answer = interactive
             ? yield* question
                 .ask({
                   sessionID: ctx.sessionID,
                   questions: [
                     {
-                      question: Checkpoint.summary(pending, yield* maps.url(ctx.sessionID)),
+                      question: Checkpoint.summary(pending, yield* maps.url(ctx.sessionID, ops?.prompt)),
                       header: Checkpoint.label(pending),
                       custom: true,
                       options: [
