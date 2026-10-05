@@ -1,0 +1,177 @@
+[
+  {
+    "t": 0.14,
+    "event": "checkpoint",
+    "text": "Checkpoint 1: Add year range filter"
+  },
+  {
+    "t": 0.14,
+    "event": "caption",
+    "text": "Checkpoint 1 is waiting. You can answer on the map, not only in the terminal."
+  },
+  {
+    "t": 4.95,
+    "event": "caption",
+    "text": "Click a box: where the file is and what changed."
+  },
+  {
+    "t": 8.07,
+    "event": "click",
+    "text": "box src/services/catalog.js"
+  },
+  {
+    "t": 12.28,
+    "event": "caption",
+    "text": "Explain one change in place."
+  },
+  {
+    "t": 15.47,
+    "event": "click",
+    "text": "Explain"
+  },
+  {
+    "t": 16.17,
+    "event": "waiting-start",
+    "text": "the model's explanation"
+  },
+  {
+    "t": 31.3,
+    "event": "waiting-end",
+    "text": "the model's explanation"
+  },
+  {
+    "t": 37.71,
+    "event": "caption",
+    "text": "Approve from the map."
+  },
+  {
+    "t": 41.16,
+    "event": "click",
+    "text": "Approve"
+  },
+  {
+    "t": 44.39,
+    "event": "caption",
+    "text": "Ask for more, in plain words."
+  },
+  {
+    "t": 47.37,
+    "event": "click",
+    "text": "Ask the agent"
+  },
+  {
+    "t": 48.83,
+    "event": "click",
+    "text": "message box"
+  },
+  {
+    "t": 53,
+    "event": "click",
+    "text": "Send"
+  },
+  {
+    "t": 53.7,
+    "event": "send",
+    "text": "Also add GET /genres that lists every genre once"
+  },
+  {
+    "t": 56.25,
+    "event": "caption",
+    "text": "The map updates while the agent edits."
+  },
+  {
+    "t": 58.31,
+    "event": "click",
+    "text": "close the chat"
+  },
+  {
+    "t": 60.02,
+    "event": "waiting-start",
+    "text": "the agent to start editing"
+  },
+  {
+    "t": 60.03,
+    "event": "waiting-end",
+    "text": "the agent to start editing"
+  },
+  {
+    "t": 65.03,
+    "event": "waiting-start",
+    "text": "checkpoint 2"
+  },
+  {
+    "t": 76.69,
+    "event": "waiting-end",
+    "text": "checkpoint 2"
+  },
+  {
+    "t": 77.2,
+    "event": "checkpoint",
+    "text": "Checkpoint 2: Add /genres endpoint"
+  },
+  {
+    "t": 77.2,
+    "event": "caption",
+    "text": "Checkpoint 2: the new flow, drawn again."
+  },
+  {
+    "t": 85.06,
+    "event": "caption",
+    "text": "Ask for a change: it comes back as a revision."
+  },
+  {
+    "t": 88.03,
+    "event": "click",
+    "text": "Ask the agent"
+  },
+  {
+    "t": 89.49,
+    "event": "click",
+    "text": "message box"
+  },
+  {
+    "t": 92.62,
+    "event": "click",
+    "text": "Send"
+  },
+  {
+    "t": 93.32,
+    "event": "send",
+    "text": "Sort the genres by name"
+  },
+  {
+    "t": 96.58,
+    "event": "click",
+    "text": "close the chat"
+  },
+  {
+    "t": 97.28,
+    "event": "waiting-start",
+    "text": "revision 2"
+  },
+  {
+    "t": 121.97,
+    "event": "waiting-end",
+    "text": "revision 2"
+  },
+  {
+    "t": 122.48,
+    "event": "checkpoint",
+    "text": "Checkpoint 2, revision 2: Sort genres list"
+  },
+  {
+    "t": 124.25,
+    "event": "click",
+    "text": "box src/http/routes/books.js"
+  },
+  {
+    "t": 131.69,
+    "event": "caption",
+    "text": ""
+  },
+  {
+    "t": 134.39,
+    "event": "click",
+    "text": "Approve"
+  }
+]
