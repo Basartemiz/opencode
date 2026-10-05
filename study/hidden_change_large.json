@@ -1,0 +1,11 @@
+{
+  "text": "Also, in src/validations/custom.validation.js, lower the minimum password length from 8 to 4.",
+  "repo": "https://github.com/hagopj13/node-express-boilerplate.git",
+  "commit": "179ae84efec61b14206d0305d941daed6c6d07f9",
+  "file": "src/validations/custom.validation.js",
+  "symbol": "password",
+  "old_value": "8",
+  "new_value": "4",
+  "shown_to_participants": false,
+  "keywords": ["password", "şifre", "parola", "8", "4 char", "length", "uzunluk", "custom.validation"]
+}

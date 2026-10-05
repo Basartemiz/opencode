@@ -278,7 +278,7 @@ def main():
     # The prompt actually used for the session (without the hidden line); falls back to study/task.md.
     source = SESSION / "task.md" if (SESSION / "task.md").exists() else STUDY / "task.md"
     task = source.read_text().strip()
-    hidden = json.loads((STUDY / "hidden_change.json").read_text())["text"]
+    hidden = json.loads(Path(os.environ.get("HIDDEN_CHANGE", STUDY / "hidden_change.json")).read_text())["text"]
     for name, build in (("A.html", build_a), ("B.html", build_b)):
         page = build(task)
         if hidden in page or hidden.lower() in page.lower():

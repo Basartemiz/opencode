@@ -1,0 +1,8 @@
+ src/config/passport.js               |  3 +-
+ src/controllers/user.controller.js   |  6 ++++
+ src/models/user.model.js             |  6 +++-
+ src/routes/v1/auth.route.js          |  4 +--
+ src/routes/v1/user.route.js          | 55 +++++++++++++++++++++++++++++-------
+ src/services/user.service.js         | 42 +++++++++++++++++++++++----
+ src/validations/custom.validation.js |  4 +--
+ 7 files changed, 98 insertions(+), 22 deletions(-)
