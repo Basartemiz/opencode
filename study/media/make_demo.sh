@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Stitches the silent demo: title card, terminal recording (if present), title card, map recording.
 # Usage: make_demo.sh <media dir>   (expects map.webm, optional ../session/terminal.mp4 or terminal.mov)
+# SESSION_DIR=<dir> picks another session folder; INTRO="<text>" changes the first card's subtitle (no colons: ffmpeg drawtext treats them as separators).
 set -euo pipefail
 MEDIA="$(cd "${1:?media dir}" && pwd)"
-SESSION="$(cd "$MEDIA/../session" && pwd)"
+SESSION="$(cd "${SESSION_DIR:-$MEDIA/../session}" && pwd)"
 FONT="${FONT:-$(fc-match -f '%{file}' 'Inter:bold' 2>/dev/null || true)}"
 W=1440
 H=900
@@ -26,7 +27,7 @@ fit() { # fit <in> <out> <speed>: speed up, scale into WxH, pad, 30 fps, no audi
 }
 
 parts=()
-card "$TMP/0.mp4" "/understand mode for OpenCode" "The agent pauses after each feature so you can see what it changed" 4
+card "$TMP/0.mp4" "/understand mode for OpenCode" "${INTRO:-The agent pauses after each feature so you can see what it changed}" 4
 parts+=("$TMP/0.mp4")
 
 TERMINAL=""

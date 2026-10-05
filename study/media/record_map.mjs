@@ -41,9 +41,11 @@ async function glide(page, locator) {
   return true
 }
 
-async function heading(page, text) {
+// Scrolls to a section heading; with a label, the caption changes first so it never lags behind the page.
+async function heading(page, text, label) {
   const target = page.locator("h2", { hasText: text }).first()
   if ((await target.count()) === 0) return false
+  if (label !== undefined) await caption(page, typeof label === "function" ? await label() : label)
   await target.evaluate((node) => {
     const top = node.getBoundingClientRect().top + window.scrollY - 70
     window.scrollTo({ top, behavior: "smooth" })
@@ -127,37 +129,40 @@ const shot = (page, name) => page.screenshot({ path: path.join(outDir, "screensh
     const missing = page.locator("button.node", { hasText: /missing|not in the project/i })
     const flagged = (await missing.count()) > 0
     const full = index === 0 || flagged
-    if (full && (await heading(page, "The big picture"))) {
-      await caption(page, "The agent's explanation, labelled as its own words")
+    if (full && (await heading(page, "The big picture", "The agent's explanation, labelled as its own words"))) {
       await page.waitForTimeout(2500)
     }
-    if (await heading(page, "How it works")) {
+    const flowLabel = flagged
+      ? "The agent says it added a route file in routes/, but that file does not exist: the map marks it as not in the project"
+      : "How the program moves through the change; arrows are checked against real imports"
+    if (await heading(page, "How it works", flowLabel)) {
       if (flagged) {
-        await caption(page, "The agent says it added a route file in routes/, but that file does not exist: the map marks it as not in the project")
         await missing.first().hover()
         await page.waitForTimeout(5500)
       } else {
-        await caption(page, "How the program moves through the change; arrows are checked against real imports")
         await page.waitForTimeout(full ? 3500 : 2500)
       }
     }
-    if (full && (await heading(page, "May be affected"))) {
-      await caption(page, "Files that were not changed but import a changed file")
-      await page.waitForTimeout(3000)
+    // Name one changed function that unchanged files call, when the list shows one.
+    const affectedLabel = async () => {
+      const text = await page.locator("section.part", { has: page.locator("h2", { hasText: "May be affected" }) }).first().innerText()
+      const used = [...text.matchAll(/uses (\w+\(\)) \(changed\)/g)].map((m) => m[1])
+      const name = used.find((fn) => fn.startsWith("password")) || used[0]
+      return name ? `Not edited, but they call ${name}, which changed: the map shows where a change reaches` : "Files that were not changed but import a changed file"
     }
-    if (full && (await heading(page, "The project"))) {
+    if (full && (await heading(page, "May be affected", affectedLabel))) {
+      await page.waitForTimeout(4500)
+    }
+    if (full && (await heading(page, "The project", "The agent's note for each file, next to the real diff"))) {
       await click(page, CHANGED_ROW, 0)
       await heading(page, "The project")
-      await caption(page, "The agent's note for each file, next to the real diff")
       await page.waitForTimeout(3500)
     }
-    if (index === 0 && (await heading(page, "What the agent did"))) {
-      await caption(page, "The steps the agent took, and the user's decision")
+    if (index === 0 && (await heading(page, "What the agent did", "The steps the agent took, and the user's decision"))) {
       await page.waitForTimeout(2800)
     }
   }
-  if (await heading(page, "This session")) {
-    await caption(page, "The whole session at a glance")
+  if (await heading(page, "This session", "The whole session at a glance")) {
     await page.waitForTimeout(3000)
   }
   await caption(page, "")
