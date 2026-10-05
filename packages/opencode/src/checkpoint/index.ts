@@ -16,6 +16,8 @@ const STEP_MARKER = /^\s*(?:\d+[.)]|[-*•])\s+/
 const SENT_BACK = "Checkpoint sent back"
 // The agent sees this many changed lines of each file when its explanation is sent back.
 const SAMPLE_LINES = 8
+// Unchanged lines kept around each change when a file's diff is split into its separate changes.
+const CONTEXT = 3
 
 export const Limits = Schema.Struct({
   files: Schema.Finite,
@@ -33,6 +35,7 @@ const Range = Schema.Struct({
 type Range = typeof Range.Type
 
 type Line = { kind: "add" | "del" | "same"; text: string; old?: number; new?: number }
+type Block = { before: Range; after: Range; lines: Line[] }
 
 export const Hunk = Schema.Struct({
   before: Range,
@@ -176,7 +179,7 @@ export function hunks(patch: string): Hunk[] {
 }
 
 // The changed blocks of a patch with every line and its line numbers, for the map page.
-export function blocks(patch: string): { before: Range; after: Range; lines: Line[] }[] {
+export function blocks(patch: string): Block[] {
   return patch.split(PATCH_START).flatMap((section) => {
     const lines = section.split("\n")
     return lines.flatMap((line, index) => {
@@ -189,6 +192,42 @@ export function blocks(patch: string): { before: Range; after: Range; lines: Lin
       return [{ before, after, lines: numbered(body, before.start, after.start) }]
     })
   })
+}
+
+// The separate changes of a patch, each with up to three unchanged lines around it, as git shows a diff. Snapshot
+// patches keep the whole file as one block, so one block can hold many changes far apart.
+export function chunks(patch: string): Block[] {
+  return blocks(patch).flatMap((block) => {
+    const changed = block.lines.flatMap((line, index) => (line.kind === "same" ? [] : [index]))
+    // Changes closer than twice the context share their unchanged lines, so they stay one chunk.
+    const groups = changed.reduce<number[][]>((all, index) => {
+      const last = all.at(-1)
+      if (last && index - last[last.length - 1] - 1 <= 2 * CONTEXT) return [...all.slice(0, -1), [...last, index]]
+      return [...all, [index]]
+    }, [])
+    return groups.map((group) => {
+      const start = Math.max(0, group[0] - CONTEXT)
+      const end = Math.min(block.lines.length, group[group.length - 1] + CONTEXT + 1)
+      if (start === 0 && end === block.lines.length) return block
+      return {
+        before: side(block, start, end, "old"),
+        after: side(block, start, end, "new"),
+        lines: block.lines.slice(start, end),
+      }
+    })
+  })
+}
+
+// Where a chunk's changes are, as the user reads them: "lines 9–10" of the file after the change, or "removed lines
+// 4–6" of the file before it when the chunk only removes lines.
+export function span(lines: readonly Line[]) {
+  const added = lines.flatMap((line) => (line.kind === "add" && line.new !== undefined ? [line.new] : []))
+  const removed = lines.flatMap((line) => (line.kind === "del" && line.old !== undefined ? [line.old] : []))
+  const numbers = added.length ? added : removed
+  const first = Math.min(...numbers)
+  const last = Math.max(...numbers)
+  const text = first === last ? `line ${first}` : `lines ${first}–${last}`
+  return added.length ? text : `removed ${text}`
 }
 
 // The files and lines the agent changed since its last checkpoint, used to force a checkpoint when it skips them.
@@ -235,15 +274,12 @@ export function next(messages: SessionV1.WithParts[]) {
 
 // Every checkpoint as the map page shows it: answered, or still waiting for the user's decision.
 export function history(messages: SessionV1.WithParts[]) {
-  return messages
-    .flatMap((message) => message.parts)
-    .flatMap((part) => {
-      if (part.type !== "tool" || part.tool !== "checkpoint" || !("metadata" in part.state)) return []
-      const entry = Option.getOrUndefined(Schema.decodeUnknownOption(Entry)(part.state.metadata))
-      const status = part.state.status === "running" ? "waiting" : "answered"
-      if (!entry || (status === "answered" && !entry.decision)) return []
-      return [{ ...entry, status }]
-    })
+  return listed(messages).map((item) => item.entry)
+}
+
+// One checkpoint, with the tool part that holds it and the assistant message that made it.
+export function locate(messages: SessionV1.WithParts[], number: number, revision: number) {
+  return listed(messages).findLast((item) => item.entry.number === number && item.entry.revision === revision)
 }
 
 // Measures a session for a user study, so understand-mode runs can be compared with build-mode runs of similar tasks.
@@ -406,7 +442,7 @@ const WORD = { added: "new file", deleted: "deleted", modified: "changed" } as c
 const CHANGE = { added: "new", changed: "changed", removed: "removed" } as const
 
 // A function as "total()", a method as "Cart.total()", and a class or type with its kind.
-function named(symbol: Symbol) {
+export function named(symbol: Symbol) {
   if (symbol.kind === "method") return `${symbol.parent ? `${symbol.parent}.` : ""}${symbol.name}()`
   if (symbol.kind === "function") return `${symbol.name}()`
   if (symbol.kind === "class" || symbol.kind === "type") return `${symbol.kind} ${symbol.name}`
@@ -440,6 +476,14 @@ function wrap(entries: string[], width: number) {
     if (last && [...last, entry].join("   ").length <= width) return [...rows.slice(0, -1), [...last, entry]]
     return [...rows, [entry]]
   }, [])
+}
+
+// One side of a chunk's range. A side without lines starts at the line before it, as in a unified diff.
+function side(block: Block, start: number, end: number, key: "old" | "new"): Range {
+  const numbers = block.lines.slice(start, end).flatMap((line) => (line[key] === undefined ? [] : [line[key]]))
+  if (numbers.length) return { start: numbers[0], lines: numbers.length }
+  const earlier = block.lines.slice(0, start).findLast((line) => line[key] !== undefined)?.[key]
+  return { start: earlier ?? Math.max(0, (key === "old" ? block.before.start : block.after.start) - 1), lines: 0 }
 }
 
 function numbered(body: string[], old: number, next: number) {
@@ -560,6 +604,19 @@ function changes(tool: string, metadata: unknown): Change[] {
       },
     ],
   })
+}
+
+// Every checkpoint in the session with where it is: answered, or still waiting for the user's decision.
+function listed(messages: SessionV1.WithParts[]) {
+  return messages.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      if (part.type !== "tool" || part.tool !== "checkpoint" || !("metadata" in part.state)) return []
+      const entry = Option.getOrUndefined(Schema.decodeUnknownOption(Entry)(part.state.metadata))
+      const status = part.state.status === "running" ? "waiting" : "answered"
+      if (!entry || (status === "answered" && !entry.decision)) return []
+      return [{ entry: { ...entry, status }, part, message: message.info }]
+    }),
+  )
 }
 
 function record(part: SessionV1.Part) {

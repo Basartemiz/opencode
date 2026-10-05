@@ -1,11 +1,11 @@
-import { Effect, Option, Schema, Stream } from "effect"
-import { LLMEvent } from "@opencode-ai/llm"
+import { Effect, Option, Schema } from "effect"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { Agent } from "@/agent/agent"
 import type { Provider } from "@/provider/provider"
 import type { LLM } from "@/session/llm"
 import { Checkpoint } from "."
 import { CheckpointLinks } from "./links"
+import { CheckpointModel } from "./model"
 import PROMPT from "./flow.txt"
 
 // The flowchart on the map. It is drawn by a short request of its own that reads only the facts of the change, not
@@ -81,23 +81,9 @@ export const draw = Effect.fn("CheckpointFlow.draw")(function* (
   },
 ) {
   const ask = (text: string) =>
-    llm
-      .stream({
-        agent: { ...input.agent, prompt: PROMPT },
-        user: input.user,
-        sessionID: input.sessionID,
-        model: input.model,
-        system: [],
-        tools: {},
-        retries: 1,
-        messages: [{ role: "user", content: text }],
-      })
-      .pipe(
-        Stream.filter(LLMEvent.is.textDelta),
-        Stream.map((event) => event.text),
-        Stream.mkString,
-        Effect.map((answer) => parse(answer, input.boxes)),
-      )
+    CheckpointModel.answer(llm, { ...input, prompt: PROMPT, request: text }).pipe(
+      Effect.map((answer) => parse(answer, input.boxes)),
+    )
   const first = yield* ask(input.request)
   if (first.length) return first
   return yield* ask(`${input.request}\n\n${RETRY}`)

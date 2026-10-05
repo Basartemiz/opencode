@@ -1,13 +1,17 @@
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
+import { Agent } from "@/agent/agent"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
+import { Provider } from "@/provider/provider"
+import { LLM } from "@/session/llm"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Checkpoint } from "."
+import { CheckpointExplain } from "./explain"
 import { CheckpointLinks } from "./links"
 import { CheckpointSymbols } from "./symbols"
 import PAGE from "./map.html.txt"
@@ -16,6 +20,24 @@ const HEADERS = { "cache-control": "no-store", "x-content-type-options": "nosnif
 // The project tree on the map lists at most this many files, and is listed again at most every few seconds.
 const MAX_FILES = 3000
 const LIST_AGE = 5000
+// Requests from the page are small JSON objects.
+const MAX_BODY = 16_384
+// The user waits for an explanation, so a slow answer is given up on.
+const EXPLAIN_WAIT = "45 seconds"
+
+// What the page sends to have the model explain a changed file, or one change in it.
+const Explain = Schema.Struct({
+  number: Schema.Finite,
+  revision: Schema.Finite,
+  file: Schema.String,
+  // The change's position in the file's chunks; without it, the whole file.
+  chunk: Schema.optional(Schema.Finite),
+  question: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+})
+type Explain = typeof Explain.Type
+
+// What the server answers a request from the page: a status and a JSON body.
+type Outcome = { status: number; body: Record<string, unknown> }
 // The page only talks to this server, and it inserts everything it shows as text.
 const PAGE_HEADERS = {
   ...HEADERS,
@@ -36,7 +58,13 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const ripgrep = yield* Ripgrep.Service
+    const agents = yield* Agent.Service
+    const provider = yield* Provider.Service
+    const llm = yield* LLM.Service
     const listed = new Map<string, { at: number; files: string[] }>()
+    // Explanations by checkpoint, file, change, and question, so asking again shows the same answer without asking the
+    // model again. Failed answers are not kept.
+    const explained = new Map<string, Promise<Outcome>>()
     // Every file of the project, for the tree on the map. The page asks again every 1.5 seconds, so the list is reused briefly.
     const project = Effect.fn("CheckpointMap.project")(function* () {
       const instance = yield* InstanceState.context
@@ -56,6 +84,54 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       return data(session, yield* sessions.messages({ sessionID }), yield* project())
     })
+    // The model that made a checkpoint explains one of its files, or one change in it, from the facts alone.
+    const explain = Effect.fn("CheckpointMap.explain")(
+      function* (sessionID: SessionID, body: Explain) {
+        const messages = yield* sessions.messages({ sessionID })
+        const found = Checkpoint.locate(messages, body.number, body.revision)
+        const file = found?.entry.files.find((item) => item.file === body.file)
+        const made = found?.message
+        if (!found || !file || made?.role !== "assistant") return refuse(404, "That file is not in this checkpoint.")
+        if (body.chunk !== undefined && !Checkpoint.chunks(file.patch ?? "")[body.chunk])
+          return refuse(404, "That change is not in this file.")
+        const user = messages.find((message) => message.info.id === made.parentID)?.info
+        const agent = yield* agents.get(made.agent)
+        if (user?.role !== "user" || !agent) return refuse(404, "This checkpoint has no model to ask.")
+        const answer = yield* CheckpointExplain.ask(llm, {
+          model: yield* provider.getModel(made.providerID, made.modelID),
+          agent,
+          user,
+          sessionID,
+          request: CheckpointExplain.request({
+            title: found.entry.title,
+            file,
+            chunk: body.chunk,
+            importers: importers(found.entry, file.file),
+            question: body.question,
+          }),
+        })
+        if (!answer) return refuse(502, "The model gave no answer. Try again.")
+        return { status: 200, body: { answer } }
+      },
+      Effect.timeout(EXPLAIN_WAIT),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("explain failed", { cause: Cause.pretty(cause) }).pipe(
+          Effect.as(refuse(502, "The model did not answer. Try again.")),
+        ),
+      ),
+    )
+    const remember = (sessionID: SessionID, body: Explain, ask: () => Promise<Outcome>) => {
+      const key = JSON.stringify([sessionID, body.number, body.revision, body.file, body.chunk, body.question?.trim()])
+      const known = explained.get(key)
+      if (known) return known
+      const asked = ask()
+      explained.set(key, asked)
+      void asked.then(
+        (outcome) => outcome.status === 200 || explained.delete(key),
+        () => explained.delete(key),
+      )
+      return asked
+    }
     const state = yield* InstanceState.make(
       Effect.fn("CheckpointMap.state")(function* () {
         const bridge = yield* EffectBridge.make()
@@ -67,8 +143,15 @@ const layer = Layer.effect(
             Bun.serve({
               hostname: "127.0.0.1",
               port: 0,
-              fetch: (request) =>
-                respond(request, secret, (sessionID) => bridge.promise(load(sessionID).pipe(Effect.option))),
+              maxRequestBodySize: MAX_BODY,
+              fetch: (request, server) =>
+                respond(request, {
+                  secret,
+                  origin: `http://127.0.0.1:${server.port}`,
+                  load: (sessionID) => bridge.promise(load(sessionID).pipe(Effect.option)),
+                  explain: (sessionID, body) =>
+                    remember(sessionID, body, () => bridge.promise(explain(sessionID, body))),
+                }),
             }),
           ),
           (server) => Effect.promise(() => server.stop(true)),
@@ -85,7 +168,11 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [Session.node, Ripgrep.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [Session.node, Ripgrep.node, Agent.node, Provider.node, LLM.node],
+})
 
 // What the map page shows for one session.
 export function data(
@@ -134,15 +221,26 @@ function confirmed(step: Checkpoint.Transition, links: readonly Checkpoint.Link[
 
 async function respond(
   request: Request,
-  secret: string,
-  load: (sessionID: SessionID) => Promise<Option.Option<ReturnType<typeof data>>>,
+  input: {
+    secret: string
+    // The map server's own origin: the only page that may send requests that act.
+    origin: string
+    load: (sessionID: SessionID) => Promise<Option.Option<ReturnType<typeof data>>>
+    explain: (sessionID: SessionID, body: Explain) => Promise<Outcome>
+  },
 ) {
   const [key, id, kind] = new URL(request.url).pathname.split("/").slice(1)
   const sessionID = Option.getOrUndefined(Schema.decodeUnknownOption(SessionID)(id))
-  if (request.method !== "GET" || key !== secret || !sessionID) return missing()
+  if (key !== input.secret || !sessionID) return missing()
+  if (request.method === "POST" && kind === "explain")
+    return write(request, input.origin, (text) => {
+      const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Explain))(text))
+      return body ? input.explain(sessionID, body) : Promise.resolve(refuse(400, "The map sent an unknown request."))
+    })
+  if (request.method !== "GET") return missing()
   if (kind === undefined) return new Response(PAGE, { headers: PAGE_HEADERS })
   if (kind !== "data" && kind !== "stats") return missing()
-  const found = await load(sessionID)
+  const found = await input.load(sessionID)
   if (Option.isNone(found)) return missing()
   if (kind === "data") return Response.json(found.value, { headers: HEADERS })
   return Response.json(
@@ -151,8 +249,38 @@ async function respond(
   )
 }
 
+// A request that acts comes only from the map page itself: from the map server's own origin, as JSON, and small.
+// Other requests are refused before their body is read.
+async function write(request: Request, origin: string, act: (text: string) => Promise<Outcome>) {
+  if (request.headers.get("origin") !== origin) return reply(refuse(403, "Only the map page can send this."))
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
+    return reply(refuse(415, "Send JSON."))
+  if (Number(request.headers.get("content-length")) > MAX_BODY) return reply(refuse(413, "The request is too large."))
+  const text = await request.text()
+  if (text.length > MAX_BODY) return reply(refuse(413, "The request is too large."))
+  return reply(await act(text))
+}
+
+function reply(outcome: Outcome) {
+  return Response.json(outcome.body, { status: outcome.status, headers: HEADERS })
+}
+
+function refuse(status: number, error: string): Outcome {
+  return { status, body: { error } }
+}
+
 function missing() {
   return new Response("Not found", { status: 404, headers: HEADERS })
+}
+
+// The files that import a file: changed files whose imports point at it, and unchanged files that may be affected.
+function importers(entry: Pick<Checkpoint.Info, "links" | "affected">, file: string) {
+  return [
+    ...new Set([
+      ...(entry.links ?? []).filter((link) => link.to === file).map((link) => link.from),
+      ...(entry.affected ?? []).filter((item) => item.uses.includes(file)).map((item) => item.file),
+    ]),
+  ]
 }
 
 function view(file: Checkpoint.File) {
@@ -163,9 +291,11 @@ function view(file: Checkpoint.File) {
     additions: file.additions,
     deletions: file.deletions,
     symbols,
-    // Each block of the diff with the functions and classes it falls in, as positions in `symbols`.
-    blocks: Checkpoint.blocks(file.patch ?? "").map((block) => ({
+    // Each separate change of the diff, with the lines it changed and the functions and classes it falls in, as
+    // positions in `symbols`.
+    blocks: Checkpoint.chunks(file.patch ?? "").map((block) => ({
       ...block,
+      span: Checkpoint.span(block.lines),
       symbols: CheckpointSymbols.within(block, symbols),
     })),
   }

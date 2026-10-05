@@ -195,6 +195,8 @@ it.instance(
       expect(exit.value.output).toContain("approved")
     }),
   { git: true },
+  // The first test of the file also starts git and the services, which can take more than the default 5 seconds.
+  15_000,
 )
 
 it.instance(

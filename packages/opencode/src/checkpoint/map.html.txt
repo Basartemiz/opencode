@@ -214,6 +214,18 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 .close:hover { background: var(--soft); color: var(--ink); }
 .note p { margin: 0 0 4px; }
 .badge.plain { color: var(--muted); background: var(--soft); }
+.where-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
+.tools { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.tool { font: 600 0.74rem var(--sans); color: var(--mod); background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 1px 8px; cursor: pointer; }
+.tool:hover { border-color: var(--mod); }
+.tool.on { background: var(--mod-bg); border-color: var(--mod); }
+.lines tr.extra td { white-space: normal; background: var(--sheet); font: 0.88rem/1.5 var(--sans); padding: 8px 10px 10px; }
+.answer { display: grid; gap: 8px; }
+.answer p { margin: 0; }
+.answer .said { border-left: 3px solid var(--claim); padding: 2px 0 2px 10px; }
+.answer .failed { color: var(--del); }
+.ask { display: flex; gap: 8px; }
+.ask input { flex: 1; min-width: 0; font: inherit; font-size: 0.88rem; padding: 5px 9px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--ink); }
 </style>
 </head>
 <body>
@@ -227,8 +239,9 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 (() => {
   "use strict"
   const base = location.pathname.replace(/\/$/, "")
-  // `panel` is the file the flowchart's side panel shows, and `step` the arrow that opened it.
-  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false }
+  // `panel` is the file the flowchart's side panel shows, and `step` the arrow that opened it. `threads` holds the
+  // model's explanations of a file or a change, `shown` the ones open, and `drafts` what the user is typing.
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false, threads: new Map(), shown: new Set(), drafts: new Map(), stale: false }
   // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
   let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
   const DECISIONS = {
@@ -401,7 +414,19 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     render()
   }
 
+  // Live updates wait while the user types in a box, so the page is not redrawn under the cursor.
+  function typing() {
+    const active = document.activeElement
+    return Boolean(active && active.matches("input[type=text], textarea"))
+  }
+
+  function refresh() {
+    if (typing()) state.stale = true
+    else render()
+  }
+
   function render() {
+    state.stale = false
     const data = state.data
     const page = document.getElementById("page")
     const y = window.scrollY
@@ -602,9 +627,95 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     const tree = el("button", "toggle", "Show in the project tree")
     tree.addEventListener("click", () => pick(id, true))
     facts.append(tree)
+    box.append(facts)
+    // A changed file can be explained as a whole, and each of its changes on its own.
+    if (record) append(box, append(el("div", "tools"), explainer(entry, id)), state.shown.has(topic(entry, id)) ? explanation(entry, id) : undefined)
+    const tools = (block, index) => ({
+      buttons: [explainer(entry, id, index)],
+      rows: state.shown.has(topic(entry, id, index)) ? [extra(explanation(entry, id, index))] : [],
+    })
     // Links in the panel open the other file in the panel too.
     const go = (file) => (file === state.panel ? render() : show(file))
-    box.append(facts, ...about(entry, id, go, "panel:" + key(entry) + ":" + id))
+    box.append(...about(entry, id, go, "panel:" + key(entry) + ":" + id, tools))
+    return box
+  }
+
+  // Which file or change of a checkpoint an explanation is about.
+  function topic(entry, file, chunk) {
+    return key(entry) + "|" + file + "|" + (chunk === undefined ? "file" : chunk)
+  }
+
+  function extra(content) {
+    const cell = append(el("td"), content)
+    cell.colSpan = 4
+    return append(el("tr", "extra"), cell)
+  }
+
+  // The button that opens the model's explanation of a file, or of one of its changes, and closes it again.
+  function explainer(entry, file, chunk) {
+    const open = state.shown.has(topic(entry, file, chunk))
+    const button = el("button", "tool" + (open ? " on" : ""), open ? "Hide the explanation" : chunk === undefined ? "Explain this file" : "Explain")
+    button.addEventListener("click", () => {
+      const target = topic(entry, file, chunk)
+      if (open) state.shown.delete(target)
+      else state.shown.add(target)
+      if (!open && !state.threads.has(target)) return explain(entry, file, chunk)
+      render()
+    })
+    return button
+  }
+
+  // Asks the map server for the model's explanation; nothing the model says is inserted as HTML.
+  async function explain(entry, file, chunk, question) {
+    const target = topic(entry, file, chunk)
+    const item = { question, status: "asking", text: "" }
+    state.threads.set(target, [...(state.threads.get(target) || []), item])
+    render()
+    try {
+      const response = await fetch(base + "/explain", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ number: entry.number, revision: entry.revision, file, chunk, question }),
+      })
+      const body = await response.json()
+      item.status = response.ok ? "done" : "failed"
+      item.text = response.ok ? body.answer : body.error || "The model did not answer. Try again."
+    } catch {
+      item.status = "failed"
+      item.text = "The map could not reach OpenCode. Is it still running?"
+    }
+    refresh()
+  }
+
+  // The model's explanations of a file or of one change, then a box to ask about what is still unclear.
+  function explanation(entry, file, chunk) {
+    const target = topic(entry, file, chunk)
+    const box = el("div", "answer")
+    ;(state.threads.get(target) || []).forEach((item) => {
+      if (item.question) box.append(append(el("p"), el("b", "", "You asked: "), document.createTextNode(item.question)))
+      if (item.status === "asking") box.append(el("p", "muted", "Asking the model…"))
+      if (item.status === "failed") box.append(el("p", "failed", item.text))
+      if (item.status === "done")
+        box.append(append(el("div", "field said"), append(el("h4"), document.createTextNode("Explanation"), tag("claim", "the model's words · not verified")), inline(el("p"), item.text)))
+    })
+    const form = el("form", "ask")
+    const input = el("input")
+    input.type = "text"
+    input.maxLength = 500
+    input.placeholder = "What don't you understand?"
+    input.setAttribute("aria-label", "What don't you understand?")
+    input.value = state.drafts.get(target) || ""
+    input.addEventListener("input", () => state.drafts.set(target, input.value))
+    form.addEventListener("submit", (event) => {
+      event.preventDefault()
+      const question = input.value.trim()
+      if (!question) return
+      state.drafts.delete(target)
+      explain(entry, file, chunk, question)
+    })
+    const send = el("button", "button", "Ask")
+    send.type = "submit"
+    box.append(append(form, input, send))
     return box
   }
 
@@ -837,8 +948,8 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 
   // A file in one checkpoint: the agent's note, the functions it changed, why it may break, the files around it, and
   // its changed lines. The project view and the flowchart's panel both show it: `go` opens another file in the same
-  // place, and `id` keeps the state of its diff.
-  function about(entry, file, go, id) {
+  // place, `id` keeps the state of its diff, and `tools` adds the panel's buttons to each change.
+  function about(entry, file, go, id, tools) {
     const record = entry.files.find((item) => item.file === file)
     const risk = (entry.affected || []).find((item) => item.file === file)
     const items = []
@@ -863,7 +974,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       if (near.length) relations.append(append(el("span"), document.createTextNode("Unchanged files that use it"), ...chips(near)))
       items.push(relations)
     }
-    if (record) items.push(...diff(record, id))
+    if (record) items.push(...diff(record, id, tools))
     return items
   }
 
@@ -910,23 +1021,28 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     )
   }
 
-  // The changed lines block by block, each under the functions it falls in; the whole diff opens on request.
-  function diff(file, id) {
+  // The changed lines change by change, each under the functions it falls in; the lines around them open on request.
+  // The project view shows the first few changed lines. The flowchart's panel shows every change, with `tools` giving
+  // its buttons and the rows they opened.
+  function diff(file, id, tools) {
     const open = state.open.has(id)
     const changed = file.blocks.flatMap((block) => block.lines.filter((line) => line.kind !== "same"))
     const heading = append(el("div", "field"), append(el("h4"), document.createTextNode(open ? "The full diff" : "What was added and removed"), tag("fact", "from the diff")))
     if (!file.blocks.length) return [heading, el("p", "muted", "No line-by-line diff was saved for this file.")]
+    const limit = tools ? Infinity : KEY_LINES
     const table = el("table")
-    let room = KEY_LINES
-    file.blocks.forEach((block) => {
+    let room = limit
+    file.blocks.forEach((block, index) => {
       if (!open && room <= 0) return
       const lines = open ? block.lines : block.lines.filter((line) => line.kind !== "same").slice(0, room)
       room -= lines.length
-      table.append(where(block, file, id))
+      const added = tools ? tools(block, index) : { buttons: [], rows: [] }
+      table.append(where(block, file, id, added.buttons))
       lines.forEach((line) => table.append(row(line)))
+      added.rows.forEach((item) => table.append(item))
     })
     const result = [heading, append(el("div", "lines"), table)]
-    if (open || changed.length > KEY_LINES || file.blocks.some((block) => block.lines.some((line) => line.kind === "same"))) {
+    if (open || changed.length > limit || file.blocks.some((block) => block.lines.some((line) => line.kind === "same"))) {
       const more = el("button", "toggle", open ? "Show only the changed lines" : "Show the full diff (" + plural(changed.length, "changed line") + ")")
       more.addEventListener("click", () => {
         if (open) state.open.delete(id)
@@ -938,14 +1054,15 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     return result
   }
 
-  // The header of one block of the diff: the functions it falls in and its lines.
-  function where(block, file, id) {
+  // The header of one change: the functions it falls in and the lines it changed, with the panel's buttons.
+  function where(block, file, id, buttons) {
     const names = (block.symbols || []).map((index) => named(file.symbols[index]))
-    const range = block.after.lines ? block.after : block.before
-    const lines = (block.after.lines ? "" : "removed ") + (range.lines > 1 ? "lines " + range.start + "–" + (range.start + range.lines - 1) : "line " + range.start)
     const marked = state.mark && state.mark.id === id && (block.symbols || []).includes(state.mark.index)
-    const cell = el("td", "", names.length ? "In " + sentence(names) + " · " + lines : lines.charAt(0).toUpperCase() + lines.slice(1))
+    const text = names.length ? "In " + sentence(names) + " · " + block.span : block.span.charAt(0).toUpperCase() + block.span.slice(1)
+    const cell = el("td")
     cell.colSpan = 4
+    if (buttons.length) cell.append(append(el("div", "where-row"), el("span", "", text), append(el("span", "tools"), ...buttons)))
+    else cell.textContent = text
     return append(el("tr", "where" + (marked ? " mark" : "")), cell)
   }
 
@@ -1006,7 +1123,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       if (raw !== state.raw) {
         state.raw = raw
         state.data = JSON.parse(raw)
-        render()
+        refresh()
       }
     } catch {
       live(false)
@@ -1015,8 +1132,15 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
   }
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.panel) hide()
+    if (event.key === "Escape" && state.panel && !typing()) hide()
   })
+  // An update that waited for the user to stop typing shows once they leave the box. The short wait lets a click on a
+  // button next to the box land before the page is redrawn.
+  document.addEventListener("focusout", () =>
+    setTimeout(() => {
+      if (state.stale && !typing()) render()
+    }, 300),
+  )
   // The diagram's columns depend on its width, so it is laid out again when the window changes size.
   let sizing = false
   window.addEventListener("resize", () => {

@@ -13,6 +13,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Checkpoint } from "@/checkpoint"
+import { CheckpointMap } from "@/checkpoint/map"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
 import { LSP } from "@/lsp/lsp"
@@ -207,6 +208,7 @@ const promptRoot = LayerNode.group([
   SystemPrompt.node,
   CrossSpawnSpawner.node,
   RuntimeFlags.node,
+  CheckpointMap.node,
 ])
 
 function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
@@ -2678,6 +2680,64 @@ it.instance(
       expect(request).toContain("greet.txt: new file, +1")
       // The agent's conversation stays out of it.
       expect(request).not.toContain("add a greeting file")
+    }),
+  { git: true },
+  15_000,
+)
+
+// A request from the map page, with the page's origin as a browser sends it.
+const fromMap = (url: URL, kind: string, body: object) =>
+  Effect.promise(() =>
+    fetch(`${url.href}/${kind}`, {
+      method: "POST",
+      headers: { origin: url.origin, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(async (response) => ({ status: response.status, body: await response.json() })),
+  )
+
+it.instance(
+  "the map's Explain asks the checkpoint's model about one change from its facts alone, and only once",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const maps = yield* CheckpointMap.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+        check: "Open greet.txt.",
+      })
+      yield* llm.text(flowAnswer)
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+      const before = yield* sessions.messages({ sessionID })
+      yield* llm.text("It writes `hello` into greet.txt.")
+
+      const url = new URL(yield* maps.url(sessionID))
+      const change = { number: 1, revision: 1, file: "greet.txt", chunk: 0 }
+      const first = yield* fromMap(url, "explain", change)
+      const again = yield* fromMap(url, "explain", change)
+
+      expect(first).toEqual({ status: 200, body: { answer: "It writes `hello` into greet.txt." } })
+      expect(again).toEqual(first)
+      // The second answer came from the map, without another request to the model.
+      expect(yield* llm.hits).toHaveLength(5)
+      const request = JSON.stringify((yield* llm.inputs)[4])
+      expect(request).toContain("You explain one part of a code change")
+      expect(request).toContain("File: greet.txt (new file)")
+      expect(request).toContain("+ hello")
+      // The agent's conversation stays out of it, and nothing is written to the session.
+      expect(request).not.toContain("add a greeting file")
+      const after = yield* sessions.messages({ sessionID })
+      expect(after.map((message) => message.parts.length)).toEqual(before.map((message) => message.parts.length))
     }),
   { git: true },
   15_000,

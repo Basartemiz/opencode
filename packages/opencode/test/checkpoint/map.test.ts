@@ -113,6 +113,16 @@ const session = Effect.fn("CheckpointMapTest.session")(function* () {
 
 const get = (url: string) => Effect.promise(() => fetch(url))
 
+// A request from the page; `origin` is the page's origin, which a browser always sends with a POST.
+const post = (url: string, input: { origin?: string; type?: string; body?: string }) =>
+  Effect.promise(() =>
+    fetch(url, {
+      method: "POST",
+      headers: { ...(input.origin ? { origin: input.origin } : {}), "content-type": input.type ?? "application/json" },
+      body: input.body ?? JSON.stringify({ number: 1, revision: 1, file: "src/greet.ts" }),
+    }),
+  )
+
 it.instance("serves a session's map page, its data, and its study data behind a private link", () =>
   Effect.gen(function* () {
     const maps = yield* CheckpointMap.Service
@@ -152,6 +162,29 @@ it.instance("refuses requests without the link's secret, and answers 404 for unk
 
     expect(wrong.status).toBe(404)
     expect(unknown.status).toBe(404)
+  }),
+)
+
+it.instance("acts only on requests from the map page itself: behind the secret, from its own origin, as small JSON", () =>
+  Effect.gen(function* () {
+    const maps = yield* CheckpointMap.Service
+    const info = yield* session()
+    const url = new URL(yield* maps.url(info.id))
+    const explain = `${url.href}/explain`
+    const origin = url.origin
+
+    expect((yield* post(`${origin}/wrong-secret/${info.id}/explain`, { origin })).status).toBe(404)
+    expect((yield* post(explain, {})).status).toBe(403)
+    expect((yield* post(explain, { origin: "http://evil.example" })).status).toBe(403)
+    expect((yield* post(explain, { origin: `http://localhost:${url.port}` })).status).toBe(403)
+    expect((yield* post(explain, { origin, type: "text/plain" })).status).toBe(415)
+    expect((yield* post(explain, { origin, body: JSON.stringify({ question: "x".repeat(20_000) }) })).status).toBe(413)
+    expect((yield* post(explain, { origin, body: "not json" })).status).toBe(400)
+    expect((yield* post(`${url.href}/data`, { origin })).status).toBe(404)
+    // A request that passes every check reaches the session; this one names a file the checkpoint did not change.
+    const other = yield* post(explain, { origin, body: JSON.stringify({ number: 1, revision: 1, file: "src/other.ts" }) })
+    expect(other.status).toBe(404)
+    expect((yield* Effect.promise(() => other.json())).error).toBe("That file is not in this checkpoint.")
   }),
 )
 

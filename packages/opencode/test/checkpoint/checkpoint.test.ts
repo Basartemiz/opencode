@@ -189,6 +189,54 @@ describe("Checkpoint.blocks", () => {
   })
 })
 
+describe("Checkpoint.chunks", () => {
+  const same = (...names: string[]) => names.map((name) => ` const ${name} = 0`)
+
+  test("splits a whole-file patch into its separate changes, each with up to three unchanged lines around it", () => {
+    // Git snapshots store a file's diff with every line as context, so far-apart changes share one block.
+    const whole = patch(
+      "a.ts",
+      "@@ -1,14 +1,14 @@",
+      ...same("a"),
+      "-const b = 1",
+      "+const b = 2",
+      ...same("c", "d", "e", "f", "g", "h", "i"),
+      "-const j = 1",
+      "-const k = 1",
+      "+const j = 2",
+      "+const k = 2",
+      ...same("l", "m", "n"),
+    )
+
+    expect(
+      Checkpoint.chunks(whole).map((chunk) => [chunk.before, chunk.after, chunk.lines.length, Checkpoint.span(chunk.lines)]),
+    ).toEqual([
+      [{ start: 1, lines: 5 }, { start: 1, lines: 5 }, 6, "line 2"],
+      [{ start: 7, lines: 8 }, { start: 7, lines: 8 }, 10, "lines 10–11"],
+    ])
+  })
+
+  test("keeps changes that share their unchanged lines in one chunk", () => {
+    const near = patch("a.ts", "@@ -1,8 +1,8 @@", "-const a = 1", "+const a = 2", ...same("b", "c", "d", "e", "f", "g"), "-const h = 1", "+const h = 2")
+
+    expect(Checkpoint.chunks(near).map((chunk) => Checkpoint.span(chunk.lines))).toEqual(["lines 1–8"])
+  })
+
+  test("names a change that only removes lines by the lines it removed", () => {
+    const removal = patch("a.ts", "@@ -1,12 +1,10 @@", ...same("a", "b", "c", "d", "e"), "-const f = 1", "-const g = 1", ...same("h", "i", "j", "k", "l"))
+
+    expect(Checkpoint.chunks(removal).map((chunk) => [chunk.before, chunk.after, Checkpoint.span(chunk.lines)])).toEqual([
+      [{ start: 3, lines: 8 }, { start: 3, lines: 6 }, "removed lines 6–7"],
+    ])
+  })
+
+  test("leaves a block that is already one change as it was", () => {
+    const small = patch("a.ts", "@@ -1,3 +1,4 @@", " const a = 1", "-const b = 2", "+const b = 3", "+const c = 4", " export {}")
+
+    expect(Checkpoint.chunks(small)).toEqual(Checkpoint.blocks(small))
+  })
+})
+
 describe("Checkpoint.edited", () => {
   test("collects the agent's file edits since the last checkpoint, one entry per file", () => {
     const messages = [
@@ -391,6 +439,20 @@ describe("Checkpoint.history", () => {
     ]
 
     expect(Checkpoint.history(messages).map((entry) => [entry.status, entry.decision])).toEqual([["answered", "stop"]])
+  })
+})
+
+describe("Checkpoint.locate", () => {
+  test("finds one checkpoint with the assistant message that made it", () => {
+    const made = assistant("understand", [
+      tool("checkpoint", completed(record({ number: 1, decision: "revise" }))),
+      tool("checkpoint", completed(record({ number: 1, revision: 2, decision: "approve" }))),
+    ])
+
+    const found = Checkpoint.locate([user(), made], 1, 2)
+
+    expect([found?.entry.revision, found?.entry.decision, found?.message.id]).toEqual([2, "approve", made.info.id])
+    expect(Checkpoint.locate([user(), made], 2, 1)).toBeUndefined()
   })
 })
 
