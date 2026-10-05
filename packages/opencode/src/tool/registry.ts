@@ -43,6 +43,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
 import { LSP } from "@/lsp/lsp"
+import { LLM } from "@/session/llm"
 import { Snapshot } from "@/snapshot"
 import { Instruction } from "../session/instruction"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -444,6 +445,7 @@ export const node = LayerNode.make({
     BackgroundJob.node,
     Provider.node,
     LSP.node,
+    LLM.node,
     Snapshot.node,
     CheckpointMap.node,
     Instruction.node,

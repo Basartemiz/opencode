@@ -88,12 +88,13 @@ const running = (metadata: Record<string, unknown>): SessionV1.ToolState => ({
 const edit = (file: string, additions: number, deletions: number) =>
   tool("edit", completed({ filediff: { file, additions, deletions } }))
 
-const record = (input: { number: number; revision?: number; decision: string; snapshot?: string }) => ({
+const record = (input: { number: number; revision?: number; decision: string; snapshot?: string; base?: string }) => ({
   number: input.number,
   revision: input.revision ?? 1,
   title: `Checkpoint ${input.number}`,
   steps: ["I changed a file."],
   impact: "impact",
+  base: input.base,
   snapshot: input.snapshot,
   files: [],
   decision: input.decision,
@@ -240,6 +241,20 @@ describe("Checkpoint.edited", () => {
       ["/p/b.ts", "added", 2, 0, 1],
       ["/p/c.ts", "deleted", 0, 3, 1],
     ])
+  })
+
+  test("after a revision request, covers the change being revised too, while the safety net counts only new edits", () => {
+    const messages = [
+      user(),
+      assistant("understand", [
+        tool("edit", completed({ filediff: { file: "/p/a.ts", patch: first, additions: 1, deletions: 1 } })),
+        tool("checkpoint", completed(record({ number: 1, decision: "revise" }))),
+        tool("edit", completed({ filediff: { file: "/p/b.ts", patch: second, additions: 1, deletions: 0 } })),
+      ]),
+    ]
+
+    expect(Checkpoint.edited(messages, "understand").map((file) => file.file)).toEqual(["/p/a.ts", "/p/b.ts"])
+    expect([...Checkpoint.usage(messages, "understand").files]).toEqual(["/p/b.ts"])
   })
 })
 
@@ -592,6 +607,22 @@ describe("Checkpoint.baseline", () => {
 
   test("is undefined when no snapshot was recorded", () => {
     expect(Checkpoint.baseline([user(), assistant("understand", [stepStart()])], "understand")).toBeUndefined()
+  })
+
+  test("after a revision request, starts where the revised checkpoint started, so the revision covers the whole change", () => {
+    const messages = [
+      user(),
+      assistant("understand", [
+        stepStart("s0"),
+        tool("checkpoint", completed(record({ number: 1, decision: "revise", base: "s0", snapshot: "s1" }))),
+        tool(
+          "checkpoint",
+          completed(record({ number: 1, revision: 2, decision: "revise", base: "s0", snapshot: "s2" })),
+        ),
+      ]),
+    ]
+
+    expect(Checkpoint.baseline(messages, "understand")).toBe("s0")
   })
 })
 

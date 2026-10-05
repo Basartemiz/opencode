@@ -2503,6 +2503,9 @@ const toolParts = (sessionID: SessionID, tool: string) =>
     ),
   )
 
+// What the model answers when OpenCode asks it for a checkpoint's flowchart.
+const flowAnswer = JSON.stringify({ flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }] })
+
 const answerCheckpoint = Effect.fn("test.answerCheckpoint")(function* (label: string) {
   const question = yield* Question.Service
   const asked = yield* pollWithTimeout(
@@ -2570,10 +2573,10 @@ it.instance(
         steps: ["I wrote greet.txt with a greeting."],
         impact: "Adds one file.",
         overview: "There is a greeting file now.",
-        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
         notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
         check: "Open greet.txt.",
       })
+      yield* llm.text(flowAnswer)
       yield* llm.text("done")
       const sessionID = yield* understand("add a greeting file")
 
@@ -2582,7 +2585,7 @@ it.instance(
       yield* Fiber.join(loop)
 
       expect(asked.questions[0]?.question).toContain("greet.txt")
-      expect(yield* llm.hits).toHaveLength(3)
+      expect(yield* llm.hits).toHaveLength(4)
       const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
       expect(checkpoint?.state.status).toBe("completed")
       expect(checkpoint?.state.status === "completed" ? checkpoint.state.metadata.decision : undefined).toBe("approve")
@@ -2602,7 +2605,6 @@ it.instance(
         steps: ["I wrote greet.txt with a greeting."],
         impact: "Adds one file.",
         overview: "There is a greeting file now.",
-        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
         check: "Open greet.txt.",
       }
       yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
@@ -2614,6 +2616,7 @@ it.instance(
         ...explanation,
         notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
       })
+      yield* llm.text(flowAnswer)
       yield* llm.text("done")
       const sessionID = yield* understand("add a greeting file")
 
@@ -2626,9 +2629,55 @@ it.instance(
       expect(checkpoints.map((part) => part.state.status)).toEqual(["error", "completed"])
       // The agent read the real changes in the result of its first call, before it wrote the second one.
       const inputs = yield* llm.inputs
-      expect(inputs).toHaveLength(4)
+      expect(inputs).toHaveLength(5)
       expect(JSON.stringify(inputs[2])).toContain("Checkpoint sent back")
       expect(JSON.stringify(inputs[2])).toContain("greet.txt: new file, +1")
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "a checkpoint's flowchart comes from a separate request that reads only the facts, and keeps only file boxes",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", {
+        title: "Add greeting",
+        steps: ["I wrote greet.txt with a greeting."],
+        impact: "Adds one file.",
+        overview: "There is a greeting file now.",
+        notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
+        check: "Open greet.txt.",
+      })
+      yield* llm.text(
+        JSON.stringify({
+          flow: [
+            { from: "user", to: "greet.txt", action: "opens the greeting" },
+            { from: "user", to: "/register", action: "posts the form" },
+            { from: "System", to: "user", action: "shows a token" },
+          ],
+        }),
+      )
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* answerCheckpoint("Approve")
+      yield* Fiber.join(loop)
+
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoint?.state.status === "completed" ? checkpoint.state.metadata.flow : undefined).toEqual([
+        { from: "user", to: "greet.txt", action: "opens the greeting" },
+      ])
+      const request = JSON.stringify((yield* llm.inputs)[2])
+      expect(request).toContain("You draw a flowchart")
+      expect(request).toContain("Boxes you may use")
+      expect(request).toContain("greet.txt: new file, +1")
+      // The agent's conversation stays out of it.
+      expect(request).not.toContain("add a greeting file")
     }),
   { git: true },
   15_000,
@@ -2646,17 +2695,17 @@ it.instance(
         steps: ["I wrote greet.txt with a greeting."],
         impact: "Adds one file.",
         overview: "There is a greeting file now.",
-        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
         notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
         check: "Open greet.txt.",
       })
+      yield* llm.text(flowAnswer)
       const sessionID = yield* understand("add a greeting file")
 
       const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
       yield* answerCheckpoint("Stop")
       yield* Fiber.join(loop)
 
-      expect(yield* llm.hits).toHaveLength(2)
+      expect(yield* llm.hits).toHaveLength(3)
       const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
       expect(checkpoint?.state.status).toBe("error")
     }),
@@ -2677,10 +2726,10 @@ it.instance(
         steps: ["I wrote greet.txt with a greeting."],
         impact: "Adds one file.",
         overview: "There is a greeting file now.",
-        flow: [{ from: "user", to: "greet.txt", action: "opens the greeting" }],
         notes: [{ file: "greet.txt", purpose: "Holds the greeting.", change: "New file." }],
         check: "Open greet.txt.",
       })
+      yield* llm.text(flowAnswer)
       yield* llm.text("all reviewed")
       const sessionID = yield* understand("add a greeting file")
 
@@ -2688,7 +2737,7 @@ it.instance(
       yield* answerCheckpoint("Approve")
       yield* Fiber.join(loop)
 
-      expect(yield* llm.hits).toHaveLength(4)
+      expect(yield* llm.hits).toHaveLength(5)
       const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
       expect(checkpoint?.state.status).toBe("completed")
     }),

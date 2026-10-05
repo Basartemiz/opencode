@@ -105,6 +105,19 @@ describe("CheckpointSymbols.scan", () => {
     ])
   })
 
+  test("leaves out values that only load another module, which are imports rather than parts of the file", () => {
+    const content = [
+      "const express = require('express')",
+      "const { hash } = require('bcrypt')",
+      "const lazy = await import('./lazy.js')",
+      "const router = express.Router()",
+    ].join("\n")
+
+    expect(CheckpointSymbols.scan("src/routes/user.js", content)).toEqual([
+      { name: "router", kind: "variable", start: 4, end: 4 },
+    ])
+  })
+
   test("reads nothing from files it does not understand", () => {
     expect(CheckpointSymbols.scan("notes.md", "function total() {\n}")).toEqual([])
   })

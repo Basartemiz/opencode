@@ -1,5 +1,5 @@
 import path from "path"
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, Exit, Schema } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./checkpoint.txt"
 import { Agent } from "../agent/agent"
@@ -7,9 +7,12 @@ import { Checkpoint } from "../checkpoint"
 import { CheckpointMap } from "../checkpoint/map"
 import { CheckpointLinks } from "../checkpoint/links"
 import { CheckpointSymbols } from "../checkpoint/symbols"
+import { CheckpointFlow } from "../checkpoint/flow"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { LSP } from "../lsp/lsp"
+import { LLM } from "../session/llm"
+import { Provider } from "../provider/provider"
 import { Permission } from "../permission"
 import { Question } from "../question"
 import { Session } from "../session/session"
@@ -17,6 +20,8 @@ import { Snapshot } from "../snapshot"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 
+// The user waits for the flowchart before the checkpoint is shown, so a slow answer is given up on.
+const FLOW_WAIT = "45 seconds"
 // Larger patches are left out of the stored checkpoint to keep session history small.
 const MAX_PATCH = 20_000
 
@@ -30,20 +35,6 @@ export const Parameters = Schema.Struct({
   // The rest is for the map page: an explainer for someone new to this code.
   overview: Schema.String.annotate({
     description: "The big picture: 2-4 sentences on what this change does and why, for someone new to this code",
-  }),
-  flow: Schema.Array(
-    Schema.Struct({
-      from: Schema.String.annotate({
-        description: 'The file where this step starts, relative to the project, or "user" when the user starts it',
-      }),
-      to: Schema.String.annotate({ description: "The file it goes to; the same file when it stays there" }),
-      action: Schema.String.annotate({
-        description: "What happens, in a few words, such as 'asks total() for the price'",
-      }),
-    }),
-  ).annotate({
-    description:
-      "How the program works through your change, as a state machine: one arrow per step, in order, from the user's action to the result. 3-7 arrows",
   }),
   notes: Schema.Array(
     Schema.Struct({
@@ -78,6 +69,8 @@ export const CheckpointTool = Tool.define(
     const fs = yield* FSUtil.Service
     const ripgrep = yield* Ripgrep.Service
     const lsp = yield* LSP.Service
+    const llm = yield* LLM.Service
+    const provider = yield* Provider.Service
 
     return {
       description: DESCRIPTION,
@@ -127,26 +120,50 @@ export const CheckpointTool = Tool.define(
           const wrong = Checkpoint.mismatch(params.notes, files)
           if ((wrong.stray.length || wrong.missing.length) && !Checkpoint.sentBack(messages))
             return yield* new Checkpoint.MismatchError({ ...wrong, changes: Checkpoint.facts(files) })
-          const changed = files.filter((file) => file.status !== "deleted").map((file) => file.file)
-          const links = yield* CheckpointLinks.find(fs, root, [
-            ...new Set([...changed, ...CheckpointLinks.mentioned(params.flow, changed)]),
-          ])
+          const affected = yield* CheckpointLinks.affected(fs, ripgrep, root, files)
+          const links = [
+            ...(yield* CheckpointLinks.find(
+              fs,
+              root,
+              files.filter((file) => file.status !== "deleted").map((file) => file.file),
+            )),
+            ...affected.flatMap((item) => item.uses.map((to) => ({ from: item.file, to }))),
+          ]
+          const agent = yield* agents.get(ctx.agent)
+          // The flowchart comes from a short request of its own that reads only these facts, not the agent's
+          // conversation. Without an answer, the checkpoint goes to the user without one.
+          const user = messages.findLast((message) => message.info.role === "user")?.info
+          const turn = messages.find((message) => message.info.id === ctx.messageID)?.info
+          const boxes = CheckpointFlow.boxes(files, links)
+          const drawn =
+            agent && user?.role === "user" && turn?.role === "assistant"
+              ? yield* Effect.gen(function* () {
+                  return yield* CheckpointFlow.draw(llm, {
+                    model: yield* provider.getModel(turn.providerID, turn.modelID),
+                    agent,
+                    user,
+                    sessionID: ctx.sessionID,
+                    request: CheckpointFlow.request({ ...params, files, links, boxes }),
+                    boxes,
+                  })
+                }).pipe(Effect.timeout(FLOW_WAIT), Effect.exit)
+              : undefined
           const pending = {
             ...Checkpoint.next(messages),
             ...params,
+            flow: drawn && Exit.isSuccess(drawn) && drawn.value.length ? drawn.value : undefined,
             base,
             snapshot: head,
             source,
             files,
             links,
-            affected: yield* CheckpointLinks.affected(fs, ripgrep, root, files),
+            affected,
             time: { asked: yield* Clock.currentTimeMillis },
           }
           const title = `${Checkpoint.label(pending)}: ${params.title}`
           yield* ctx.metadata({ title, metadata: pending })
 
           const session = yield* sessions.get(ctx.sessionID)
-          const agent = yield* agents.get(ctx.agent)
           // Same rule the registry uses for the question tool, plus sessions that deny questions,
           // such as non-interactive `opencode run`.
           const interactive =

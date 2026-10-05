@@ -200,9 +200,10 @@ export function usage(messages: SessionV1.WithParts[], agent: string) {
   }
 }
 
-// Without git snapshots, the edit tools' own diffs are the record of what the agent changed since its last checkpoint.
+// Without git snapshots, the edit tools' own diffs are the record of what the next checkpoint covers: the changes since
+// the last checkpoint the user settled, which after a revision request includes the change being revised.
 export function edited(messages: SessionV1.WithParts[], agent: string): File[] {
-  const groups = unreviewed(messages, agent).reduce(
+  const groups = unreviewed(messages, agent, settles).reduce(
     (result, change) => result.set(change.file, [...(result.get(change.file) ?? []), change]),
     new Map<string, Change[]>(),
   )
@@ -310,8 +311,12 @@ export function stats(messages: SessionV1.WithParts[]) {
 }
 
 // The snapshot the next checkpoint diffs against: the previous checkpoint, or the start of the agent's current run.
+// After a revision request it is where the revised checkpoint started.
 export function baseline(messages: SessionV1.WithParts[], agent: string) {
   const last = messages.flatMap((message) => message.parts).findLast(resets)
+  // A revision covers the whole change again, so it reaches the user even when only the explanation changed.
+  const revised = last && record(last)
+  if (revised?.decision === "revise") return revised.base
   if (last?.type === "tool" && "metadata" in last.state)
     return Option.getOrUndefined(Schema.decodeUnknownOption(Snapshotted)(last.state.metadata))?.snapshot
   return messages.reduce<string | undefined>((found, message) => {
@@ -518,12 +523,12 @@ const PatchDiff = Schema.Struct({
 type Change = Omit<File, "hunks">
 
 // The file changes the agent's completed edits made since its last checkpoint.
-function unreviewed(messages: SessionV1.WithParts[], agent: string) {
+function unreviewed(messages: SessionV1.WithParts[], agent: string, since: (part: SessionV1.Part) => boolean = resets) {
   const parts = messages.flatMap((message) =>
     message.info.role === "assistant" && message.info.agent === agent ? message.parts : [],
   )
   return parts
-    .slice(parts.findLastIndex(resets) + 1)
+    .slice(parts.findLastIndex(since) + 1)
     .flatMap((part) =>
       part.type === "tool" && part.state.status === "completed" ? changes(part.tool, part.state.metadata) : [],
     )
@@ -571,6 +576,11 @@ function returned(part: SessionV1.Part) {
     part.state.status === "error" &&
     part.state.error.includes(SENT_BACK)
   )
+}
+
+// A checkpoint the user settled: approved, stopped, or with nothing to review. A revision request does not settle it.
+function settles(part: SessionV1.Part) {
+  return resets(part) && record(part)?.decision !== "revise"
 }
 
 // A finished checkpoint starts a new review; a stopped one counts too, since the user saw its diff.

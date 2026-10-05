@@ -64,16 +64,6 @@ export function user(name: string) {
   return USER.test(name.trim())
 }
 
-// The project files on the agent's arrows, so an arrow that starts at a file the checkpoint did not change
-// can be checked too. Paths outside the project are left out and never read.
-export function mentioned(flow: readonly { from: string; to: string }[], changed: readonly string[]) {
-  return flow
-    .flatMap((step) => [step.from, step.to])
-    .filter((name) => !user(name))
-    .map((name) => changed.find((file) => same(file, name)) ?? clean(name))
-    .filter(inside)
-}
-
 // The links from each file to the project files it uses, keeping the first candidate that exists.
 export const find = Effect.fn("CheckpointLinks.find")(function* (
   fs: FSUtil.Interface,

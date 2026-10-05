@@ -1,6 +1,6 @@
 Pause so the user can review what you changed since the last checkpoint, then continue with their decision.
 
-OpenCode computes the exact diff since the previous checkpoint and which changed file uses which. The user sees a short summary in the terminal. A map page in the browser draws your flow as a state machine, checks each arrow against the real imports, and shows the project with your notes next to the real diff, like a short guide for someone new to this code. The user then approves, asks for a revision, or stops the run.
+OpenCode computes the exact diff since the previous checkpoint and which changed file uses which. The user sees a short summary in the terminal. A map page in the browser draws a flowchart of the change from the diff, checks each arrow against the real imports, and shows the project with your notes next to the real diff, like a short guide for someone new to this code. The user then approves, asks for a revision, or stops the run.
 
 When to call it:
 - When a feature or behavior change is complete: the program now does something new or different, such as a feature that works, changed logic or data flow, or a fixed bug. This usually covers several edits across a few files.
@@ -15,10 +15,9 @@ Parameters shown in the terminal:
 
 Parameters shown on the map page:
 - overview: the big picture in 2-4 sentences: what this change does and why
-- flow: how the program moves through your change, as a state machine: one arrow per step, in order, from the user's action to the result. Each arrow goes from one file to another (or stays in the same file) and has a short action. For example: user → src/index.js "runs the shop", src/index.js → src/checkout.js "asks receipt() for the receipt", src/checkout.js → src/cart.js "asks total() for the price", src/cart.js → src/cart.js "takes 10% off for SAVE10". Use 3-7 arrows.
 - notes: one note for each file you changed since the last checkpoint, and no others: its path relative to the project, what the file is for, and what you changed in it and why. OpenCode checks your notes against the real diff. If they do not match, it sends you the real changes and asks you to describe them instead.
 - check: how the user can try the change: a command to run or what to click, and what they should see
 
 The result tells you what the user decided:
 - Approved: continue with your plan.
-- Revision requested: apply the user's feedback, then call checkpoint again before starting anything new.
+- Revision requested: apply the user's feedback, then call checkpoint again before starting anything new. That checkpoint covers the whole change again, so describe all of it, including when you only rewrote your explanation.

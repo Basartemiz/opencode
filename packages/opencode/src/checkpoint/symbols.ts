@@ -42,6 +42,8 @@ const FUNCTION = /^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s*\*?\s
 const CLASS = /^\s*(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/
 const TYPE = /^\s*(?:export\s+)?(?:declare\s+)?(?:interface|type|(?:const\s+)?enum)\s+([A-Za-z_$][\w$]*)/
 const VALUE = /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=(?!=)\s*(.*)$/
+// The value of a declaration that only loads another module, such as require("express"): an import, not a part.
+const LOADS = /^(?:await\s+)?(?:require|import)\s*\(/
 // The value of a declaration that makes it a function: an arrow function or a function expression.
 const LAMBDA = /^(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_$][\w$]*\s*=>)/
 const METHOD =
@@ -303,6 +305,7 @@ function declaration(line: string, depth: number): { name: string; kind: Kind } 
   const alias = line.match(TYPE)
   if (alias) return { name: alias[1], kind: "type" }
   const value = line.match(VALUE)
+  if (value && LOADS.test(value[2])) return undefined
   if (value && LAMBDA.test(value[2])) return { name: value[1], kind: "function" }
   if (value && depth === 0) return { name: value[1], kind: "variable" }
   return undefined

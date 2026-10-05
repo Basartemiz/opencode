@@ -13,6 +13,8 @@ import { CheckpointMap } from "../../src/checkpoint/map"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { LSP } from "../../src/lsp/lsp"
+import { LLM } from "../../src/session/llm"
+import { Provider } from "../../src/provider/provider"
 import { Question } from "../../src/question"
 import { Session } from "../../src/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -41,6 +43,8 @@ const it = testEffect(
       FSUtil.node,
       Ripgrep.node,
       LSP.node,
+      LLM.node,
+      Provider.node,
     ]),
   ),
 )
@@ -51,10 +55,6 @@ const params = {
   steps: ["I changed the greeting from hi to hello.", "I imported greet in main.ts."],
   impact: "Everything that prints the greeting changes.",
   overview: "The greeting is now hello everywhere.",
-  flow: [
-    { from: "user", to: "src/main.ts", action: "runs main.ts" },
-    { from: "src/main.ts", to: "src/greet.ts", action: "asks greet() for the text" },
-  ],
   notes: [{ file: "src/greet.ts", purpose: "Holds greet().", change: "It returns hello now." }],
   check: "Run main.ts and look for hello.",
 }
@@ -180,7 +180,8 @@ it.instance(
       expect(info.number).toBe(1)
       expect(info.steps).toEqual(params.steps)
       expect(info.overview).toBe(params.overview)
-      expect(info.flow).toEqual(params.flow)
+      // No model answers in these tests, so the checkpoint reaches the user without a flowchart.
+      expect(info.flow).toBeUndefined()
       expect(info.notes).toEqual(input.notes)
       expect(info.check).toBe(params.check)
       // Computed from the import lines, so the map can draw which file uses which.
@@ -197,7 +198,7 @@ it.instance(
 )
 
 it.instance(
-  "checks the agent's arrows against the imports of files the checkpoint did not change",
+  "links a changed file to the unchanged files that import it, so the map can check the flowchart's arrows",
   () =>
     Effect.gen(function* () {
       yield* write("src/app.ts", "import { greet } from './greet'\n")
@@ -205,13 +206,7 @@ it.instance(
       const turn = yield* start()
       yield* write("src/greet.ts", "export const greet = () => 'hello'\n")
 
-      const { exit } = yield* review(turn, "Approve", [], {
-        ...params,
-        flow: [
-          { from: "./src/app.ts", to: "src/greet.ts", action: "asks greet() for the text" },
-          { from: "../outside.ts", to: "src/greet.ts", action: "is never read" },
-        ],
-      })
+      const { exit } = yield* review(turn, "Approve")
 
       if (!Exit.isSuccess(exit)) throw new Error("checkpoint failed")
       const info = decode(exit.value.metadata)
@@ -322,6 +317,41 @@ it.instance(
       expect(info.decision).toBe("revise")
       expect(info.comment).toBe("Use a named constant for the greeting")
       expect(exit.value.output).toContain("Use a named constant for the greeting")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "asks the user again after a revision request, even when the agent only rewrote its explanation",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const turn = yield* start()
+      yield* write("greet.ts", "export const greeting = 'hello'\n")
+      const first = yield* review(turn, "Draw the flow with files, not routes")
+      if (!Exit.isSuccess(first.exit)) throw new Error("checkpoint failed")
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        sessionID: turn.sessionID,
+        messageID: turn.messageID,
+        type: "tool",
+        tool: "checkpoint",
+        callID: "call_first",
+        state: {
+          status: "completed",
+          input: params,
+          output: first.exit.value.output,
+          title: first.exit.value.title,
+          metadata: first.exit.value.metadata,
+          time: { start: 0, end: 0 },
+        },
+      })
+
+      const second = yield* review(turn, "Approve")
+
+      expect(second.asked.questions[0].header).toBe("Checkpoint 1 (revision 2)")
+      if (!Exit.isSuccess(second.exit)) throw new Error("checkpoint failed")
+      expect(decode(second.exit.value.metadata).files.map((file) => file.file)).toEqual(["greet.ts"])
     }),
   { git: true },
 )

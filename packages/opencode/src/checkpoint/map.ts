@@ -99,7 +99,7 @@ export function data(
     session: { id: session.id, title: session.title },
     checkpoints: checkpoints.map((entry) => ({
       ...entry,
-      // Each arrow of the agent's state machine, checked against the imports OpenCode found between the two files.
+      // Each arrow of the flowchart, checked against the imports OpenCode found between the two files.
       flow: entry.flow?.map((step) => ({ ...step, confirmed: confirmed(step, entry.links ?? []) })),
       files: entry.files.map((file) => ({
         ...view(file),

@@ -95,11 +95,13 @@ section.part { margin: 0 0 38px; }
 .stage svg { position: absolute; left: 0; top: 0; overflow: visible; color: var(--ink); pointer-events: none; }
 .stage path.edge { fill: none; stroke: currentColor; stroke-width: 1.7; }
 .stage path.edge.unchecked { stroke: var(--wait); stroke-dasharray: 6 5; }
+.stage path.life { fill: none; stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 4 4; }
 .node {
   position: absolute; display: grid; gap: 1px; align-content: center; text-align: center; padding: 6px 10px; border-radius: 12px;
   border: 2px solid var(--rule); background: var(--sheet); cursor: pointer; overflow: hidden;
 }
 .node .name { font: 700 0.86rem var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .folder { font: 0.68rem var(--mono); color: var(--ink); opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node .kind { font-size: 0.7rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node.user { background: var(--ink); color: var(--sheet); border-color: var(--ink); border-radius: 999px; cursor: default; }
 .node.user .kind { color: var(--sheet); opacity: 0.7; }
@@ -109,11 +111,12 @@ section.part { margin: 0 0 38px; }
 .node.context { border-style: dashed; }
 .node.missing { border-style: dashed; border-color: var(--del); }
 .label {
-  position: absolute; display: flex; gap: 6px; align-items: flex-start; font-size: 0.82rem; line-height: 1.35; background: var(--sheet);
+  position: absolute; width: max-content; display: flex; gap: 6px; align-items: flex-start; font-size: 0.82rem; line-height: 1.35; background: var(--sheet);
   padding: 2px 6px; border-radius: 6px; box-shadow: 0 0 0 1px var(--rule);
 }
 .label b { flex: none; min-width: 18px; height: 18px; border-radius: 9px; display: inline-grid; place-items: center; background: var(--claim); color: #fff; font-size: 0.7rem; }
 .label.unchecked { box-shadow: 0 0 0 1px var(--wait); }
+.label span { min-width: 0; overflow-wrap: anywhere; }
 .hint { margin: 6px 0 0; font-size: 0.82rem; }
 .explain { margin: 0 0 12px; font-size: 0.85rem; max-width: 90ch; }
 .sequence { margin: 12px 0 0; padding-left: 1.4em; color: var(--muted); font-size: 0.88rem; max-width: 80ch; }
@@ -368,11 +371,11 @@ section.part { margin: 0 0 38px; }
         el(
           "p",
           "working",
-          "The agent is working: " +
+          "The agent is working. Its next checkpoint will cover " +
             plural(data.unreviewed.length, "file") +
-            " changed since the last checkpoint (" +
+            ": " +
             data.unreviewed.map((file) => file.file).join(", ") +
-            "). It explains them at its next checkpoint.",
+            ".",
         ),
       )
     }
@@ -424,12 +427,12 @@ section.part { margin: 0 0 38px; }
     return append(el("div", "hero"), eyebrow, el("h1", "", entry.title), inline(el("p", "lead"), entry.impact))
   }
 
-  // The agent's state machine: each file the program passes through is a box, and each step is a numbered arrow.
+  // The flowchart: each file the program passes through is a box, and each step is a numbered arrow.
   function machine(entry, files) {
-    const section = part("How it works", tag("claim"), tag("fact", "arrows checked against the code"))
+    const section = part("How it works", tag("claim", "drawn by the model from the diff · not verified"), tag("fact", "arrows checked against the code"))
     const flow = entry.flow || []
     if (!flow.length) {
-      section.append(el("p", "muted", "The agent did not describe how the program moves through this change."))
+      section.append(el("p", "muted", "No flowchart for this change: the model did not draw one."))
       return section
     }
     const resolve = (name) => {
@@ -451,6 +454,11 @@ section.part { margin: 0 0 38px; }
       })
       return { number: index + 1, from: from.id, to: to.id, action: step.action, confirmed: step.confirmed }
     })
+    // Boxes that share a file name, such as routes/reports.js and services/reports.js, also show their folder.
+    const counts = nodes.reduce((all, node) => all.set(node.name, (all.get(node.name) || 0) + 1), new Map())
+    nodes.forEach((node) => {
+      if (node.kind !== "user" && counts.get(node.name) > 1) node.folder = String(node.id).split("/").at(-2) || "."
+    })
     const legend = el("div", "legend")
     legend.append(
       append(el("span"), legendLine(false), document.createTextNode("Solid: the code confirms it")),
@@ -459,7 +467,7 @@ section.part { margin: 0 0 38px; }
     const why = inline(
       el("p", "muted explain"),
       "To check an arrow, OpenCode reads the import lines of both files, such as `import { total } from \"./cart.js\"`, which shows that one file uses the other. " +
-        "A dashed arrow means neither file imports the other: the agent says they work together, but the code shows no direct link. " +
+        "A dashed arrow means neither file imports the other: the flowchart says they work together, but the code shows no direct link. " +
         "It can still be right, for example when files talk through a web request or an event, so check that step. " +
         "Arrows from or to you, and arrows inside one file, have nothing to check.",
     )
@@ -486,127 +494,91 @@ section.part { margin: 0 0 38px; }
     return line
   }
 
-  // Lays out the state machine once the page has its width: boxes in a row, arrows between them, labels on the arrows.
+  // Lays out the flowchart once the page has its width, as a sequence: each file is a column with its box on top, and
+  // each step is a row of its own with a numbered arrow from one column to another. A label has its row to itself, so
+  // it can never cover a box or another label; a longer label only makes its row taller.
   function layout() {
     document.querySelectorAll(".machine").forEach((area) => {
       const nodes = JSON.parse(area.dataset.nodes)
       const steps = JSON.parse(area.dataset.steps)
-      // Boxes and gaps shrink to fit the page; when even the smallest sizes are too wide, the diagram scrolls sideways.
-      const room = area.clientWidth - 48
-      const count = nodes.length
-      const width = Math.max(116, Math.min(150, count > 1 ? (room - (count - 1) * 130) / count : 150))
-      const gap = count > 1 ? Math.max(110, Math.min(220, (room - count * width) / (count - 1))) : 0
-      const height = 56
-      const stage = el("div", "stage")
+      // Columns shrink to fit the page; when even the narrowest are too wide, the diagram scrolls sideways.
+      const column = Math.max(150, Math.min(240, (area.clientWidth - 32) / nodes.length))
+      const width = Math.min(column - 24, 190)
+      const height = nodes.some((node) => node.folder) ? 70 : 56
+      // A diagram narrower than the page is centered in it.
+      const offset = Math.max(16, (area.clientWidth - nodes.length * column) / 2)
+      const center = (index) => offset + index * column + column / 2
       const at = new Map(nodes.map((node, index) => [node.id, index]))
-      const left = (index) => 24 + index * (width + gap)
-      const row = 0
+      const stage = el("div", "stage")
       const drawing = svg("svg")
       const marker = svg("marker", { id: "tip", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" })
       marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "currentColor" }))
       const defs = svg("defs")
       defs.append(marker)
       drawing.append(defs)
-      const labels = []
-      const above = []
-      const below = []
-      const used = new Map()
-      steps.forEach((step) => {
-        const a = at.get(step.from)
-        const b = at.get(step.to)
-        const pair = a + ">" + b
-        const repeat = used.get(pair) || 0
-        used.set(pair, repeat + 1)
-        const unchecked = step.confirmed === false
-        let d
-        let point
-        let place
-        // A label between two neighboring boxes must fit in the gap between them; labels over arcs can be wider.
-        let room = 180
-        if (b === a + 1 && repeat === 0) {
-          room = gap - 12
-          const y = row + height / 2
-          d = `M${left(a) + width},${y} L${left(b)},${y}`
-          point = { x: left(a) + width + gap / 2, y: y - 8 }
-          place = "above"
-        } else if (a === b) {
-          const level = above.filter((span) => span[0] <= a && span[1] >= a).length
-          above.push([a, a])
-          const x = left(a) + width / 2
-          const lift = 46 + level * 58
-          d = `M${x - 24},${row} C${x - 40},${row - lift} ${x + 40},${row - lift} ${x + 24},${row}`
-          point = { x, y: row - lift * 0.75 - 6 }
-          place = "above"
-        } else if (b > a) {
-          const level = above.filter((span) => span[0] < b && span[1] > a).length
-          above.push([a, b])
-          const lift = 60 + level * 58
-          const x1 = left(a) + width * 0.7
-          const x2 = left(b) + width * 0.3
-          d = `M${x1},${row} C${x1},${row - lift} ${x2},${row - lift} ${x2},${row}`
-          point = { x: (x1 + x2) / 2, y: row - lift * 0.75 - 6 }
-          place = "above"
-        } else {
-          const level = below.filter((span) => span[0] < a && span[1] > b).length
-          below.push([b, a])
-          const drop = 60 + level * 58
-          const x1 = left(a) + width * 0.3
-          const x2 = left(b) + width * 0.7
-          d = `M${x1},${row + height} C${x1},${row + height + drop} ${x2},${row + height + drop} ${x2},${row + height}`
-          point = { x: (x1 + x2) / 2, y: row + height + drop * 0.75 + 6 }
-          place = "below"
-        }
-        drawing.append(svg("path", { d, class: "edge" + (unchecked ? " unchecked" : ""), "marker-end": "url(#tip)" }))
-        const tagLabel = el("div", "label" + (unchecked ? " unchecked" : ""))
-        if (unchecked) tagLabel.title = "Not confirmed by the code: neither file imports the other"
-        append(tagLabel, el("b", "", String(step.number)), inline(el("span"), step.action))
-        tagLabel.style.maxWidth = room + "px"
-        tagLabel.style.left = point.x + "px"
-        tagLabel.style.top = point.y + "px"
-        tagLabel.style.transform = place === "above" ? "translate(-50%, -100%)" : "translate(-50%, 0)"
-        tagLabel.dataset.place = place
-        labels.push(tagLabel)
-      })
       const boxes = nodes.map((node, index) => {
         const box = el("button", "node " + node.kind)
-        box.style.left = left(index) + "px"
-        box.style.top = row + "px"
+        box.style.left = center(index) - width / 2 + "px"
+        box.style.top = "16px"
         box.style.width = width + "px"
         box.style.height = height + "px"
         const parts = node.parts || []
-        const word = { user: "starts it", missing: "missing file", context: "unchanged", affected: "may be affected" }[node.kind] || STATUS[node.kind]
+        const word = { user: "starts it", missing: "not in the project", context: "unchanged", affected: "may be affected" }[node.kind] || STATUS[node.kind]
         box.title = (node.kind === "missing" ? node.id + " (not in the project)" : node.file || "You") + (parts.length ? "\nChanged: " + parts.join(", ") : "")
-        append(box, el("span", "name", node.name), el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
+        append(box, el("span", "name", node.name))
+        if (node.folder) box.append(el("span", "folder", "in " + node.folder + "/"))
+        box.append(el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
         if (node.file) box.addEventListener("click", () => pick(node.file, true))
         return box
       })
+      // A label over an arrow stays between the two columns it joins; the label of a step inside one file sits beside it.
+      const labels = steps.map((step) => {
+        const a = at.get(step.from)
+        const b = at.get(step.to)
+        const unchecked = step.confirmed === false
+        const label = el("div", "label" + (unchecked ? " unchecked" : ""))
+        if (unchecked) label.title = "Not confirmed by the code: neither file imports the other"
+        append(label, el("b", "", String(step.number)), inline(el("span"), step.action))
+        if (a === b) {
+          label.style.left = center(a) + 40 + "px"
+          label.style.maxWidth = Math.max(column - 52, 160) + "px"
+        } else {
+          label.style.left = (center(a) + center(b)) / 2 + "px"
+          label.style.maxWidth = Math.min(Math.abs(center(b) - center(a)) - 16, 420) + "px"
+          label.style.transform = "translateX(-50%)"
+        }
+        return label
+      })
       append(stage, drawing, ...boxes, ...labels)
       area.replaceChildren(stage)
-      // Labels that would cover an earlier label move up (or down, under the boxes) until they are clear.
-      const overlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
-      labels.forEach((label, index) => {
-        const below = label.dataset.place === "below"
-        Array.from({ length: 12 }).some(() => {
-          const rect = label.getBoundingClientRect()
-          const hit = labels.slice(0, index).map((other) => other.getBoundingClientRect()).find((other) => overlap(rect, other))
-          if (!hit) return true
-          const shift = below ? hit.bottom - rect.top + 4 : rect.bottom - hit.top + 4
-          label.style.top = parseFloat(label.style.top) + (below ? shift : -shift) + "px"
-          return false
-        })
+      // With their widths set, the labels' heights are known: each step gets a row as tall as its label, then its arrow.
+      const first = 16 + height + 22
+      const rows = steps.reduce((all, step, index) => {
+        const y = all.length ? all[all.length - 1].next : first
+        labels[index].style.top = y + "px"
+        const arrow = y + labels[index].offsetHeight + 8
+        const a = at.get(step.from)
+        const b = at.get(step.to)
+        return [...all, { a, b, arrow, next: arrow + (a === b ? 24 : 0) + 18 }]
+      }, [])
+      const bottom = rows.length ? rows[rows.length - 1].next : first
+      nodes.forEach((_, index) =>
+        drawing.append(svg("path", { d: `M${center(index)},${16 + height} V${bottom}`, class: "life" })),
+      )
+      rows.forEach((row, index) => {
+        const unchecked = steps[index].confirmed === false
+        const d =
+          row.a === row.b
+            ? `M${center(row.a)},${row.arrow} h28 v24 h-26`
+            : `M${center(row.a)},${row.arrow} H${center(row.b) + (row.b > row.a ? -2 : 2)}`
+        drawing.append(svg("path", { d, class: "edge" + (unchecked ? " unchecked" : ""), "marker-end": "url(#tip)" }))
       })
-      // Measure the labels, then move everything down so the arrows above the boxes fit.
       const frame = stage.getBoundingClientRect()
-      const extents = [...labels, ...boxes].map((node) => node.getBoundingClientRect())
-      const top = Math.min(0, ...extents.map((rect) => rect.top - frame.top)) - 16
-      const bottom = Math.max(height, ...extents.map((rect) => rect.bottom - frame.top)) + 16
-      const right = Math.max(...extents.map((rect) => rect.right - frame.left)) + 24
-      ;[...boxes, ...labels].forEach((node) => (node.style.top = parseFloat(node.style.top) - top + "px"))
+      const right = Math.max(offset + nodes.length * column + 16, ...labels.map((label) => label.getBoundingClientRect().right - frame.left + 16))
       drawing.setAttribute("width", String(right))
-      drawing.setAttribute("height", String(bottom - top))
-      drawing.querySelectorAll("path.edge").forEach((path) => path.setAttribute("transform", "translate(0," + -top + ")"))
+      drawing.setAttribute("height", String(bottom))
       stage.style.width = right + "px"
-      stage.style.height = bottom - top + "px"
+      stage.style.height = bottom + "px"
       const hint = area.nextElementSibling
       if (hint && hint.classList.contains("hint")) hint.hidden = right <= area.clientWidth + 1
     })
