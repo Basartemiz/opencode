@@ -224,7 +224,39 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 .answer p { margin: 0; }
 .answer .said { border-left: 3px solid var(--claim); padding: 2px 0 2px 10px; }
 .answer .failed { color: var(--del); }
-.answer .sent { color: var(--add); font-weight: 600; }
+.button.primary { background: var(--ink); color: var(--sheet); border-color: var(--ink); }
+.button:disabled { opacity: 0.6; cursor: default; }
+.decide { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 14px; border-radius: 10px; background: var(--wait-bg); border: 1px solid var(--wait); max-width: 760px; font-size: 0.92rem; }
+.node.live { outline: 2px dashed var(--claim); outline-offset: 3px; animation: live 1.4s ease-in-out infinite; }
+@keyframes live { 50% { outline-color: transparent; } }
+@media (prefers-reduced-motion: reduce) { .node.live { animation: none; } }
+.badge.live { color: var(--claim); background: var(--claim-bg); }
+.chat-open {
+  position: fixed; right: 20px; bottom: 20px; z-index: 20; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 999px;
+  padding: 10px 16px; background: var(--ink); color: var(--sheet); font-weight: 600; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); cursor: pointer;
+}
+.dot.wait { background: var(--wait); box-shadow: 0 0 0 3px var(--wait-bg); }
+.chat {
+  position: fixed; right: 20px; bottom: 76px; z-index: 20; width: min(420px, calc(100vw - 32px)); height: min(640px, calc(100vh - 140px));
+  display: flex; flex-direction: column; background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2);
+}
+.chat[hidden] { display: none; }
+.chat-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+.chat-title { display: grid; gap: 2px; }
+.chat-title span { font-size: 0.8rem; color: var(--muted); }
+.chat-list { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.msg { margin: 0; max-width: 90%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; line-height: 1.45; }
+.msg.user { align-self: flex-end; background: var(--mod-bg); padding: 7px 11px; border-radius: 12px 12px 4px 12px; }
+.msg.agent { align-self: flex-start; background: var(--soft); padding: 7px 11px; border-radius: 12px 12px 12px 4px; }
+.msg.event { max-width: none; font-size: 0.78rem; color: var(--muted); }
+.chat-decide .decide { margin: 0 14px 10px; }
+.chat-form { display: flex; gap: 8px; padding: 10px 14px 6px; border-top: 1px solid var(--rule); }
+.chat-form textarea { flex: 1; min-width: 0; resize: none; font: inherit; font-size: 0.9rem; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.chat-note { margin: 0; padding: 0 14px 10px; font-size: 0.8rem; color: var(--muted); }
+@media (max-width: 700px) {
+  .chat { left: 12px; right: 12px; width: auto; bottom: 68px; height: calc(100vh - 150px); }
+  .chat-open { right: 12px; bottom: 12px; }
+}
 .ask { display: flex; gap: 8px; }
 .ask input { flex: 1; min-width: 0; font: inherit; font-size: 0.88rem; padding: 5px 9px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--ink); }
 </style>
@@ -236,14 +268,28 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
   <a id="download" class="button" download>Download study data (JSON)</a>
 </header>
 <main class="page" id="page"><p class="empty">Loading…</p></main>
+<button id="chat-open" class="chat-open" type="button" aria-controls="chat" aria-expanded="false"><span class="dot" id="chat-dot"></span><span>Ask the agent</span></button>
+<section id="chat" class="chat" aria-label="Chat with the agent" hidden>
+  <header class="chat-head">
+    <div class="chat-title"><strong>Ask the agent</strong><span id="chat-state"></span></div>
+    <button id="chat-close" class="close" type="button" aria-label="Close" title="Close">×</button>
+  </header>
+  <div id="chat-list" class="chat-list" aria-live="polite"></div>
+  <div id="chat-decide" class="chat-decide"></div>
+  <form id="chat-form" class="chat-form">
+    <textarea id="chat-text" rows="2" maxlength="4000" aria-label="Message to the agent" placeholder="Tell the agent what to change"></textarea>
+    <button id="chat-send" class="button primary" type="submit">Send</button>
+  </form>
+  <p id="chat-note" class="chat-note"></p>
+</section>
 <script>
 (() => {
   "use strict"
   const base = location.pathname.replace(/\/$/, "")
   // `panel` is the file the flowchart's side panel shows, and `step` the arrow that opened it. `threads` holds the
-  // model's explanations of a file or a change, `shown` the ones open, `forms` the requests to the agent about a
-  // change, and `drafts` what the user is typing.
-  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false, threads: new Map(), shown: new Set(), forms: new Map(), drafts: new Map(), stale: false }
+  // model's explanations of a file or a change, `shown` the ones open, and `drafts` what the user is typing. `chat` is
+  // whether the chat with the agent is open.
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false, threads: new Map(), shown: new Set(), drafts: new Map(), stale: false, chat: false, sending: false, answering: false }
   // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
   let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
   const DECISIONS = {
@@ -251,7 +297,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     revise: "Revision asked",
     stop: "Stopped",
     auto: "Approved automatically",
-    waiting: "Waiting for your answer in the terminal",
+    waiting: "Waiting for your answer",
   }
   const STATUS = { added: "new", modified: "changed", deleted: "deleted" }
   const CHANGES = { added: "new", changed: "changed", removed: "removed" }
@@ -416,10 +462,11 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     render()
   }
 
-  // Live updates wait while the user types in a box, so the page is not redrawn under the cursor.
+  // Live updates wait while the user types in a box on the page, so it is not redrawn under the cursor. The chat is not
+  // part of the page, so the page keeps updating while the user writes to the agent.
   function typing() {
     const active = document.activeElement
-    return Boolean(active && active.matches("input[type=text], textarea"))
+    return Boolean(active && active.closest("#page") && active.matches("input[type=text], textarea"))
   }
 
   function refresh() {
@@ -447,19 +494,17 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     }
     if (state.follow || !list.some((entry) => key(entry) === state.selected))
       state.selected = list.length ? key(list.at(-1)) : undefined
+    talk()
     page.replaceChildren()
+    // The files the agent changed since its last checkpoint, as it changes them; each opens its live diff.
     if (data.unreviewed.length) {
-      page.append(
-        el(
-          "p",
-          "working",
-          "The agent is working. Its next checkpoint will cover " +
-            plural(data.unreviewed.length, "file") +
-            ": " +
-            data.unreviewed.map((file) => file.file).join(", ") +
-            ".",
-        ),
-      )
+      const banner = el("p", "working", data.working ? "The agent is working. Changed so far, for its next checkpoint: " : "Changed since the last checkpoint and not reviewed yet: ")
+      data.unreviewed.forEach((file, index) => {
+        const link = el("button", "toggle", file.file)
+        link.addEventListener("click", () => show(file.file))
+        append(banner, index ? document.createTextNode(", ") : undefined, link)
+      })
+      page.append(banner)
     }
     const entry = list.find((item) => key(item) === state.selected)
     if (!entry) {
@@ -532,7 +577,84 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
 
   function hero(entry) {
     const eyebrow = append(el("div", "eyebrow", label(entry)), el("span", "status " + status(entry), DECISIONS[status(entry)]))
-    return append(el("div", "hero"), eyebrow, el("h1", "", entry.title), inline(el("p", "lead"), entry.impact))
+    return append(el("div", "hero"), eyebrow, el("h1", "", entry.title), inline(el("p", "lead"), entry.impact), entry.status === "waiting" ? decide(entry) : undefined)
+  }
+
+  // Approve or stop the checkpoint waiting for the user, as its options in the terminal do. Anything the user writes in
+  // the chat instead becomes their revision request.
+  function decide(entry) {
+    const approve = el("button", "button primary", state.answering ? "Sending…" : "Approve")
+    const stop = el("button", "button", "Stop")
+    approve.disabled = state.answering
+    stop.disabled = state.answering
+    approve.addEventListener("click", () => answer("approve"))
+    stop.addEventListener("click", () => {
+      if (window.confirm("Stop the run at " + label(entry) + "?")) answer("stop")
+    })
+    const other = el("button", "toggle", "tell the agent what to change")
+    other.addEventListener("click", () => toggleChat(true))
+    return append(el("div", "decide"), el("strong", "", label(entry) + " is waiting for your answer."), approve, stop, append(el("span", "muted"), document.createTextNode("or "), other))
+  }
+
+  async function answer(decision) {
+    state.answering = true
+    refresh()
+    const result = await post("answer", { decision })
+    state.answering = false
+    document.getElementById("chat-note").textContent = result.ok
+      ? decision === "approve" ? "Approved: the agent continues." : "Stopped: the run ends here."
+      : result.body.error || "OpenCode did not take the answer."
+    refresh()
+  }
+
+  // The chat with the agent shows the same conversation as the terminal. It is not part of the page, so redrawing the
+  // page never touches what the user is writing to the agent.
+  function talk() {
+    const data = state.data
+    const waiting = data.checkpoints.find((entry) => entry.status === "waiting")
+    document.getElementById("chat-dot").className = "dot" + (waiting ? " wait" : data.working ? " on" : "")
+    document.getElementById("chat-state").textContent = waiting
+      ? label(waiting) + " is waiting for your answer"
+      : data.working ? "The agent is working…" : "The agent is waiting for your next request"
+    // A list the user has read to the end keeps showing the newest line. It is scrolled last, because the bar that
+    // approves a checkpoint changes how tall the list is.
+    const list = document.getElementById("chat-list")
+    const end = list.scrollTop + list.clientHeight >= list.scrollHeight - 40
+    list.replaceChildren(...data.chat.map((item) => (item.role === "status" ? el("p", "msg event", item.text) : inline(el("p", "msg " + item.role), item.text))))
+    document.getElementById("chat-decide").replaceChildren(...(waiting ? [decide(waiting)] : []))
+    document.getElementById("chat-text").placeholder = waiting ? "Tell the agent what to change in " + label(waiting) : "Tell the agent what to change"
+    if (end) list.scrollTop = list.scrollHeight
+  }
+
+  function toggleChat(open) {
+    state.chat = open
+    document.getElementById("chat").hidden = !open
+    document.getElementById("chat-open").setAttribute("aria-expanded", String(open))
+    if (!open) return
+    const list = document.getElementById("chat-list")
+    list.scrollTop = list.scrollHeight
+    document.getElementById("chat-text").focus()
+  }
+
+  // Sends what the user wrote to the agent: the answer to a waiting checkpoint, or else a new message in the session.
+  async function ask() {
+    const box = document.getElementById("chat-text")
+    const note = document.getElementById("chat-note")
+    const send = document.getElementById("chat-send")
+    const text = box.value.trim()
+    if (!text || state.sending) return
+    state.sending = true
+    send.disabled = true
+    note.textContent = "Sending…"
+    const result = await post("send", { text })
+    state.sending = false
+    send.disabled = false
+    if (result.ok) box.value = ""
+    note.textContent = !result.ok
+      ? result.body.error || "OpenCode did not take the message."
+      : result.body.via === "revision"
+        ? "Sent as your answer to the waiting checkpoint: the agent revises it, and the map follows its changes."
+        : "Sent: the map follows the agent's changes as it works."
   }
 
   // The flowchart: each file the program passes through is a box, and each step is a numbered arrow.
@@ -540,7 +662,8 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     const section = part("How it works", tag("claim", "drawn by the model from the diff · not verified"), tag("fact", "arrows checked against the code"))
     const flow = entry.flow || []
     if (!flow.length) {
-      section.append(el("p", "muted", "No flowchart for this change: the model did not draw one."))
+      const empty = el("p", "muted", "No flowchart for this change: the model did not draw one.")
+      section.append(state.panel ? append(el("div", "flow open"), empty, panel(entry, [], undefined)) : empty)
       return section
     }
     const resolve = (name) => {
@@ -562,10 +685,12 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       })
       return { number: index + 1, from: from.id, to: to.id, action: step.action, confirmed: step.confirmed }
     })
-    // Boxes that share a file name, such as routes/reports.js and services/reports.js, also show their folder.
+    // Boxes that share a file name, such as routes/reports.js and services/reports.js, also show their folder. A box
+    // for a file the agent is changing now is marked, so the diagram follows the agent's work until its next checkpoint.
     const counts = nodes.reduce((all, node) => all.set(node.name, (all.get(node.name) || 0) + 1), new Map())
     nodes.forEach((node) => {
       if (node.kind !== "user" && counts.get(node.name) > 1) node.folder = String(node.id).split("/").at(-2) || "."
+      if (node.kind !== "user" && changing(node.id)) node.live = true
     })
     const legend = el("div", "legend")
     legend.append(
@@ -619,30 +744,37 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     }
     const record = entry.files.find((file) => file.file === id)
     const risk = (entry.affected || []).find((item) => item.file === id)
-    if (!record && !risk && !state.data.project.includes(id)) {
+    const now = changing(id)
+    if (!record && !risk && !now && !state.data.project.includes(id)) {
       box.append(el("p", "muted", "The flowchart names this file, but it is not in the project."))
       return box
     }
     const facts = el("div", "facts")
+    if (now) facts.append(el("span", "badge live", "changing now"))
     if (record) facts.append(el("span", "badge " + record.status, STATUS[record.status]), counts(record.additions, record.deletions))
-    if (!record) facts.append(el("span", "badge " + (risk ? "affected" : "plain"), risk ? "may be affected" : "unchanged"))
+    if (!record && !now) facts.append(el("span", "badge " + (risk ? "affected" : "plain"), risk ? "may be affected" : "unchanged"))
     const tree = el("button", "toggle", "Show in the project tree")
     tree.addEventListener("click", () => pick(id, true))
     facts.append(tree)
     box.append(facts)
+    // What the agent changed in the file since its last checkpoint, as it works.
+    if (now) box.append(...diff(now, "live:" + id, undefined, true))
+    if (!record && !risk && now) return box
     // A changed file can be explained as a whole, and each of its changes on its own.
     if (record) append(box, append(el("div", "tools"), explainer(entry, id)), state.shown.has(topic(entry, id)) ? explanation(entry, id) : undefined)
     const tools = (block, index) => ({
-      buttons: [explainer(entry, id, index), asker(entry, id, index, "revert"), asker(entry, id, index, "change")],
-      rows: [
-        state.shown.has(topic(entry, id, index)) ? extra(explanation(entry, id, index)) : undefined,
-        state.forms.has(topic(entry, id, index)) ? extra(compose(entry, id, index)) : undefined,
-      ].filter(Boolean),
+      buttons: [explainer(entry, id, index)],
+      rows: state.shown.has(topic(entry, id, index)) ? [extra(explanation(entry, id, index))] : [],
     })
     // Links in the panel open the other file in the panel too.
     const go = (file) => (file === state.panel ? render() : show(file))
     box.append(...about(entry, id, go, "panel:" + key(entry) + ":" + id, tools))
     return box
+  }
+
+  // A file the agent changed since its last checkpoint, with its live diff, or undefined.
+  function changing(file) {
+    return state.data.unreviewed.find((item) => same(item.file, file))
   }
 
   // Which file or change of a checkpoint an explanation is about.
@@ -676,102 +808,24 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     const item = { question, status: "asking", text: "" }
     state.threads.set(target, [...(state.threads.get(target) || []), item])
     render()
-    try {
-      const response = await fetch(base + "/explain", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ number: entry.number, revision: entry.revision, file, chunk, question }),
-      })
-      const body = await response.json()
-      item.status = response.ok ? "done" : "failed"
-      item.text = response.ok ? body.answer : body.error || "The model did not answer. Try again."
-    } catch {
-      item.status = "failed"
-      item.text = "The map could not reach OpenCode. Is it still running?"
-    }
+    const result = await post("explain", { number: entry.number, revision: entry.revision, file, chunk, question })
+    item.status = result.ok ? "done" : "failed"
+    item.text = result.ok ? result.body.answer : result.body.error || "The model did not answer. Try again."
     refresh()
   }
 
-  // "Revert this" and "Ask for a change": the button that opens the box for a request to the agent about one change.
-  function asker(entry, file, chunk, action) {
-    const target = topic(entry, file, chunk)
-    const form = state.forms.get(target)
-    const open = Boolean(form && form.action === action && form.status !== "sent")
-    const button = el("button", "tool" + (open ? " on" : ""), action === "revert" ? "Revert this" : "Ask for a change")
-    button.addEventListener("click", () => {
-      if (open) state.forms.delete(target)
-      else state.forms.set(target, { action, status: "editing" })
-      render()
-    })
-    return button
-  }
-
-  // The box for a request to the agent about one change. OpenCode puts where the change is in front of what the user
-  // writes; the page itself never edits files.
-  function compose(entry, file, chunk) {
-    const target = topic(entry, file, chunk)
-    const form = state.forms.get(target)
-    const box = el("div", "answer")
-    if (form.status === "sent") {
-      const how = form.via === "revision" ? "as your answer to the checkpoint that was waiting" : "as a new message in this session"
-      box.append(el("p", "sent", "Sent to the agent " + how + "."), append(el("p"), document.createTextNode("“" + form.sent + "”")))
-      box.append(el("p", "muted", "The map shows what the agent changed at its next checkpoint."))
-      return box
-    }
-    const waiting = state.data.checkpoints.some((item) => item.status === "waiting")
-    box.append(
-      el(
-        "p",
-        "muted",
-        (form.action === "revert" ? "Ask the agent to undo this change. " : "Tell the agent what to change here. ") +
-          "OpenCode adds the file, the function, the lines, and the checkpoint. " +
-          (waiting ? "A checkpoint is waiting for your answer, so this becomes your revision request." : "It goes to the agent as a new message in this session."),
-      ),
-    )
-    if (form.status === "failed") box.append(el("p", "failed", form.error))
-    const draft = "send|" + target
-    const input = el("input")
-    input.type = "text"
-    input.maxLength = 2000
-    input.placeholder = form.action === "revert" ? "Anything to add? (optional)" : "What should change?"
-    input.setAttribute("aria-label", input.placeholder)
-    input.value = state.drafts.get(draft) || ""
-    input.addEventListener("input", () => state.drafts.set(draft, input.value))
-    const button = el("button", "button", form.status === "sending" ? "Sending…" : "Send to the agent")
-    button.type = "submit"
-    button.disabled = form.status === "sending"
-    const ask = el("form", "ask")
-    ask.addEventListener("submit", (event) => {
-      event.preventDefault()
-      if (form.action === "change" && !input.value.trim()) return input.focus()
-      send(entry, file, chunk, form.action, input.value.trim())
-    })
-    box.append(append(ask, input, button))
-    return box
-  }
-
-  async function send(entry, file, chunk, action, text) {
-    const target = topic(entry, file, chunk)
-    const form = { action, status: "sending" }
-    state.forms.set(target, form)
-    render()
+  // Sends a request to the map server. Requests that act are JSON from this page; the server refuses anything else.
+  async function post(kind, body) {
     try {
-      const response = await fetch(base + "/send", {
+      const response = await fetch(base + "/" + kind, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ number: entry.number, revision: entry.revision, file, chunk, action, text: text || undefined }),
+        body: JSON.stringify(body),
       })
-      const body = await response.json()
-      form.status = response.ok ? "sent" : "failed"
-      form.via = body.via
-      form.sent = body.sent
-      form.error = body.error || "OpenCode did not take the request."
-      if (response.ok) state.drafts.delete("send|" + target)
+      return { ok: response.ok, body: await response.json() }
     } catch {
-      form.status = "failed"
-      form.error = "The map could not reach OpenCode. Is it still running?"
+      return { ok: false, body: { error: "The map could not reach OpenCode. Is it still running?" } }
     }
-    refresh()
   }
 
   // The model's explanations of a file or of one change, then a box to ask about what is still unclear.
@@ -838,7 +892,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       const picked = steps.find((step) => step.number === state.step)
       const lit = (id) => (picked ? picked.from === id || picked.to === id : state.panel === id)
       const boxes = nodes.map((node, index) => {
-        const box = el("button", "node " + node.kind + (lit(node.id) ? " lit" : ""))
+        const box = el("button", "node " + node.kind + (lit(node.id) ? " lit" : "") + (node.live ? " live" : ""))
         box.dataset.id = node.id
         box.style.left = center(index) - width / 2 + "px"
         box.style.top = "16px"
@@ -849,7 +903,7 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
         box.title = (node.kind === "missing" ? node.id + " (not in the project)" : node.file || "You") + (parts.length ? "\nChanged: " + parts.join(", ") : "")
         append(box, el("span", "name", node.name))
         if (node.folder) box.append(el("span", "folder", "in " + node.folder + "/"))
-        box.append(el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
+        box.append(el("span", "kind", node.live ? "changing now" : word + (parts.length ? " · " + parts.join(", ") : "")))
         if (node.kind !== "user") box.addEventListener("click", () => show(node.id))
         return box
       })
@@ -935,8 +989,10 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
     section.id = "project"
     const changes = new Map(entry.files.map((file) => [file.file, file]))
     const risky = new Map((entry.affected || []).map((item) => [item.file, item]))
-    const all = [...new Set([...files, ...changes.keys(), ...risky.keys()])].sort()
-    const marked = all.filter((file) => changes.has(file) || risky.has(file))
+    // Files the agent is changing now are listed too, even new ones the project list does not have yet.
+    const live = state.data.unreviewed.map((file) => file.file)
+    const all = [...new Set([...files, ...changes.keys(), ...risky.keys(), ...live])].sort()
+    const marked = all.filter((file) => changes.has(file) || risky.has(file) || live.includes(file))
     const shown = state.only ? marked : all
     const root = { folders: new Map(), files: [], path: "" }
     shown.forEach((file) => {
@@ -985,7 +1041,8 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       .forEach((folder) => {
         const inside = [...changes.keys()].filter((file) => file.startsWith(folder.path))
         const near = [...risky.keys()].filter((file) => file.startsWith(folder.path) && !changes.has(file))
-        const open = state.only || (state.folders.has(folder.path) ? state.folders.get(folder.path) : inside.length + near.length > 0)
+        const now = state.data.unreviewed.some((file) => file.file.startsWith(folder.path))
+        const open = state.only || (state.folders.has(folder.path) ? state.folders.get(folder.path) : inside.length + near.length > 0 || now)
         const row = append(el("button", "row folder"), el("span", "caret", open ? "▾" : "▸"), el("span", "name", folder.name + "/"))
         const counted = [inside.length ? inside.length + " changed" : "", near.length ? near.length + " may be affected" : ""].filter(Boolean)
         if (counted.length) row.append(el("span", "count", counted.join(" · ")))
@@ -999,8 +1056,9 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
       })
     node.files.forEach((file) => {
       const change = changes.get(file)
-      const row = el("button", "row" + (change || risky.has(file) ? "" : " plain") + (state.file === file ? " selected" : ""))
+      const row = el("button", "row" + (change || risky.has(file) || changing(file) ? "" : " plain") + (state.file === file ? " selected" : ""))
       append(row, el("span", "caret", ""), el("span", "name", file.split("/").at(-1)))
+      if (changing(file)) row.append(el("span", "badge live", "changing now"))
       if (change) row.append(el("span", "badge " + change.status, STATUS[change.status]))
       if (risky.has(file)) row.append(el("span", "badge affected", "may be affected"))
       if (change) row.append(append(el("span", "count"), counts(change.additions, change.deletions)))
@@ -1111,10 +1169,12 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
   // The changed lines change by change, each under the functions it falls in; the lines around them open on request.
   // The project view shows the first few changed lines. The flowchart's panel shows every change, with `tools` giving
   // its buttons and the rows they opened.
-  function diff(file, id, tools) {
+  function diff(file, id, tools, live) {
     const open = state.open.has(id)
     const changed = file.blocks.flatMap((block) => block.lines.filter((line) => line.kind !== "same"))
-    const heading = append(el("div", "field"), append(el("h4"), document.createTextNode(open ? "The full diff" : "What was added and removed"), tag("fact", "from the diff")))
+    const heading = live
+      ? append(el("div", "field"), append(el("h4"), document.createTextNode("Changing now"), tag("fact", "from the agent's edits · not in a checkpoint yet")))
+      : append(el("div", "field"), append(el("h4"), document.createTextNode(open ? "The full diff" : "What was added and removed"), tag("fact", "from the diff")))
     if (!file.blocks.length) return [heading, el("p", "muted", "No line-by-line diff was saved for this file.")]
     const limit = tools ? Infinity : KEY_LINES
     const table = el("table")
@@ -1219,7 +1279,21 @@ section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
   }
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.panel && !typing()) hide()
+    if (event.key !== "Escape") return
+    if (state.chat && document.activeElement && document.activeElement.closest("#chat")) return toggleChat(false)
+    if (state.panel && !typing()) hide()
+  })
+  document.getElementById("chat-open").addEventListener("click", () => toggleChat(!state.chat))
+  document.getElementById("chat-close").addEventListener("click", () => toggleChat(false))
+  document.getElementById("chat-form").addEventListener("submit", (event) => {
+    event.preventDefault()
+    ask()
+  })
+  // Enter sends; Shift+Enter starts a new line.
+  document.getElementById("chat-text").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return
+    event.preventDefault()
+    ask()
   })
   // An update that waited for the user to stop typing shows once they leave the box. The short wait lets a click on a
   // button next to the box land before the page is redrawn.

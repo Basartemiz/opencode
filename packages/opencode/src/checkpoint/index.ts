@@ -615,13 +615,19 @@ function changes(tool: string, metadata: unknown): Change[] {
 function listed(messages: SessionV1.WithParts[]) {
   return messages.flatMap((message) =>
     message.parts.flatMap((part) => {
-      if (part.type !== "tool" || part.tool !== "checkpoint" || !("metadata" in part.state)) return []
-      const entry = Option.getOrUndefined(Schema.decodeUnknownOption(Entry)(part.state.metadata))
-      const status = part.state.status === "running" ? "waiting" : "answered"
-      if (!entry || (status === "answered" && !entry.decision)) return []
-      return [{ entry: { ...entry, status }, part, message: message.info }]
+      const found = entry(part)
+      return found && part.type === "tool" ? [{ entry: found, part, message: message.info }] : []
     }),
   )
+}
+
+// The checkpoint a tool part holds, answered or still waiting for the user's decision.
+export function entry(part: SessionV1.Part) {
+  if (part.type !== "tool" || part.tool !== "checkpoint" || !("metadata" in part.state)) return undefined
+  const found = Option.getOrUndefined(Schema.decodeUnknownOption(Entry)(part.state.metadata))
+  const status = part.state.status === "running" ? "waiting" : "answered"
+  if (!found || (status === "answered" && !found.decision)) return undefined
+  return { ...found, status }
 }
 
 function record(part: SessionV1.Part) {

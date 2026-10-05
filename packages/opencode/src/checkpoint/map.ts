@@ -11,10 +11,10 @@ import { Question } from "@/question"
 import { LLM } from "@/session/llm"
 import type { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 import { SessionID } from "@/session/schema"
 import { Checkpoint } from "."
 import { CheckpointExplain } from "./explain"
-import { CheckpointFeedback } from "./feedback"
 import { CheckpointLinks } from "./links"
 import { CheckpointSymbols } from "./symbols"
 import PAGE from "./map.html.txt"
@@ -27,6 +27,8 @@ const LIST_AGE = 5000
 const MAX_BODY = 16_384
 // The user waits for an explanation, so a slow answer is given up on.
 const EXPLAIN_WAIT = "45 seconds"
+// The map's chat shows this many of the latest lines of the conversation.
+const MAX_CHAT = 120
 
 // What the page sends to have the model explain a changed file, or one change in it.
 const Explain = Schema.Struct({
@@ -39,16 +41,13 @@ const Explain = Schema.Struct({
 })
 type Explain = typeof Explain.Type
 
-// What the page sends to ask the agent to revert one change, or to change it as the user says.
-const Send = Schema.Struct({
-  number: Schema.Finite,
-  revision: Schema.Finite,
-  file: Schema.String,
-  chunk: Schema.Finite,
-  action: Schema.Literals(["revert", "change"]),
-  text: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
-})
+// What the user writes to the agent in the map's chat.
+const Send = Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(4000)) })
 type Send = typeof Send.Type
+
+// The user's answer to the checkpoint that is waiting, as its options in the terminal give it.
+const Answer = Schema.Struct({ decision: Schema.Literals(["approve", "stop"]) })
+type Answer = typeof Answer.Type
 
 // What the server answers a request from the page: a status and a JSON body.
 type Outcome = { status: number; body: Record<string, unknown> }
@@ -81,6 +80,7 @@ const layer = Layer.effect(
     const provider = yield* Provider.Service
     const llm = yield* LLM.Service
     const question = yield* Question.Service
+    const status = yield* SessionStatus.Service
     const listed = new Map<string, { at: number; files: string[] }>()
     const prompts = new Map<SessionID, Prompt>()
     // Explanations by checkpoint, file, change, and question, so asking again shows the same answer without asking the
@@ -103,7 +103,17 @@ const layer = Layer.effect(
     })
     const load = Effect.fn("CheckpointMap.load")(function* (sessionID: SessionID) {
       const session = yield* sessions.get(sessionID)
-      return data(session, yield* sessions.messages({ sessionID }), yield* project())
+      const working = (yield* status.get(sessionID)).type !== "idle"
+      return data(session, yield* sessions.messages({ sessionID }), yield* project(), working)
+    })
+    // The question the checkpoint waiting for the user asks them, if one waits.
+    const pending = Effect.fn("CheckpointMap.pending")(function* (
+      sessionID: SessionID,
+      messages: SessionV1.WithParts[],
+    ) {
+      const open = Checkpoint.waiting(messages)
+      if (!open) return undefined
+      return (yield* question.list()).find((item) => item.sessionID === sessionID && item.tool?.callID === open.part.callID)
     })
     // The model that made a checkpoint explains one of its files, or one change in it, from the facts alone.
     const explain = Effect.fn("CheckpointMap.explain")(
@@ -141,22 +151,15 @@ const layer = Layer.effect(
         ),
       ),
     )
-    // A request about one change goes to the agent. When a checkpoint waits for the user, it is their answer, which the
-    // checkpoint tool reads as a revision request, as if typed in the terminal. Otherwise it is a new message in the
-    // session. The page never edits files itself.
+    // What the user writes in the map's chat goes to the agent. When a checkpoint waits for the user, it is their answer,
+    // which the checkpoint tool reads as a revision request, as if typed in the terminal. Otherwise it is a new message
+    // in the session. The page never edits files itself.
     const send = Effect.fn("CheckpointMap.send")(
       function* (sessionID: SessionID, body: Send, scope: Scope.Scope) {
+        const text = body.text.trim()
+        if (!text) return refuse(400, "Write what the agent should do.")
         const messages = yield* sessions.messages({ sessionID })
-        const found = Checkpoint.locate(messages, body.number, body.revision)
-        const file = found?.entry.files.find((item) => item.file === body.file)
-        if (!found || !file || !Checkpoint.chunks(file.patch ?? "")[body.chunk])
-          return refuse(404, "That change is not in this checkpoint.")
-        const text = CheckpointFeedback.message({ ...body, checkpoint: found.entry, file })
-        if (!text) return refuse(400, "Say what should change.")
-        const open = Checkpoint.waiting(messages)
-        const asked = open
-          ? (yield* question.list()).find((item) => item.sessionID === sessionID && item.tool?.callID === open.part.callID)
-          : undefined
+        const asked = yield* pending(sessionID, messages)
         if (asked) {
           yield* question.reply({ requestID: asked.id, answers: [[text]] })
           return { status: 200, body: { via: "revision", sent: text } }
@@ -180,7 +183,21 @@ const layer = Layer.effect(
       },
       Effect.catchCause((cause) =>
         Effect.logWarning("send failed", { cause: Cause.pretty(cause) }).pipe(
-          Effect.as(refuse(500, "OpenCode could not pass the request on. Try again.")),
+          Effect.as(refuse(500, "OpenCode could not pass the message on. Try again.")),
+        ),
+      ),
+    )
+    // Approve or stop the checkpoint waiting for the user, the same as choosing that option in the terminal.
+    const answer = Effect.fn("CheckpointMap.answer")(
+      function* (sessionID: SessionID, body: Answer) {
+        const asked = yield* pending(sessionID, yield* sessions.messages({ sessionID }))
+        if (!asked) return refuse(409, "No checkpoint is waiting for an answer.")
+        yield* question.reply({ requestID: asked.id, answers: [[body.decision === "approve" ? "Approve" : "Stop"]] })
+        return { status: 200, body: { answered: body.decision } }
+      },
+      Effect.catchCause((cause) =>
+        Effect.logWarning("answer failed", { cause: Cause.pretty(cause) }).pipe(
+          Effect.as(refuse(500, "OpenCode could not pass the answer on. Try again.")),
         ),
       ),
     )
@@ -218,6 +235,7 @@ const layer = Layer.effect(
                   explain: (sessionID, body) =>
                     remember(sessionID, body, () => bridge.promise(explain(sessionID, body))),
                   send: (sessionID, body) => bridge.promise(send(sessionID, body, scope)),
+                  answer: (sessionID, body) => bridge.promise(answer(sessionID, body)),
                 }),
             }),
           ),
@@ -239,19 +257,22 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Session.node, Ripgrep.node, Agent.node, Provider.node, LLM.node, Question.node],
+  deps: [Session.node, Ripgrep.node, Agent.node, Provider.node, LLM.node, Question.node, SessionStatus.node],
 })
 
-// What the map page shows for one session.
+// What the map page shows for one session. `working` says whether the agent is running now.
 export function data(
   session: { id: string; title: string; directory: string },
   messages: SessionV1.WithParts[],
   project: readonly string[],
+  working = false,
 ) {
   const checkpoints = Checkpoint.history(messages)
   const agent = messages.findLast((message) => message.info.role === "assistant")?.info.agent
   return {
     session: { id: session.id, title: session.title },
+    working,
+    chat: chat(messages, session.directory),
     checkpoints: checkpoints.map((entry) => ({
       ...entry,
       // Each arrow of the flowchart, checked against the imports OpenCode found between the two files.
@@ -277,6 +298,55 @@ export function data(
   }
 }
 
+// The conversation in the map's chat: what the user and the agent wrote, a short line for each file the agent edits
+// and for each checkpoint, and the user's revision requests. Text OpenCode adds to messages itself is left out.
+export function chat(messages: SessionV1.WithParts[], directory: string) {
+  return messages
+    .flatMap((message) =>
+      message.parts.flatMap((part): { id: string; role: "user" | "agent" | "status"; text: string }[] => {
+        if (part.type === "text")
+          return part.synthetic || part.ignored || !part.text.trim()
+            ? []
+            : [{ id: part.id, role: message.info.role === "user" ? "user" : "agent", text: part.text.trim() }]
+        if (part.type !== "tool" || message.info.role !== "assistant") return []
+        const checkpoint = Checkpoint.entry(part)
+        if (checkpoint) {
+          const line = `${Checkpoint.label(checkpoint)}: ${checkpoint.title} · ${OUTCOME[checkpoint.decision ?? "waiting"]}`
+          return [
+            { id: part.id, role: "status", text: line },
+            ...(checkpoint.comment ? [{ id: `${part.id}:comment`, role: "user" as const, text: checkpoint.comment }] : []),
+          ]
+        }
+        const files = touched(part).map((file) => (path.isAbsolute(file) ? path.relative(directory, file) : file))
+        if (!files.length) return []
+        const names = files.length > 1 ? `${files.slice(0, -1).join(", ")} and ${files.at(-1)}` : files[0]
+        const text =
+          part.state.status === "completed"
+            ? `Edited ${names}`
+            : part.state.status === "error"
+              ? `Could not edit ${names}`
+              : `Editing ${names}…`
+        return [{ id: part.id, role: "status", text }]
+      }),
+    )
+    .slice(-MAX_CHAT)
+}
+
+// The files an edit tool call changes: the one file of an edit or a write, or the files a patch names.
+function touched(part: SessionV1.ToolPart) {
+  const input = part.state.input
+  if ((part.tool === "edit" || part.tool === "write") && typeof input.filePath === "string") return [input.filePath]
+  if (part.tool !== "apply_patch" || typeof input.patchText !== "string") return []
+  return [...input.patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1].trim())
+}
+const OUTCOME = {
+  waiting: "waiting for your answer",
+  approve: "approved",
+  auto: "approved automatically",
+  revise: "revision asked",
+  stop: "stopped",
+} as const
+
 // The user is not a file, so steps from or to the user have nothing to check; neither do steps within one file.
 function confirmed(step: Checkpoint.Transition, links: readonly Checkpoint.Link[]) {
   const same = CheckpointLinks.same
@@ -296,21 +366,18 @@ async function respond(
     load: (sessionID: SessionID) => Promise<Option.Option<ReturnType<typeof data>>>
     explain: (sessionID: SessionID, body: Explain) => Promise<Outcome>
     send: (sessionID: SessionID, body: Send) => Promise<Outcome>
+    answer: (sessionID: SessionID, body: Answer) => Promise<Outcome>
   },
 ) {
   const [key, id, kind] = new URL(request.url).pathname.split("/").slice(1)
   const sessionID = Option.getOrUndefined(Schema.decodeUnknownOption(SessionID)(id))
   if (key !== input.secret || !sessionID) return missing()
   if (request.method === "POST" && kind === "explain")
-    return write(request, input.origin, (text) => {
-      const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Explain))(text))
-      return body ? input.explain(sessionID, body) : Promise.resolve(refuse(400, "The map sent an unknown request."))
-    })
+    return write(request, input.origin, Explain, (body) => input.explain(sessionID, body))
   if (request.method === "POST" && kind === "send")
-    return write(request, input.origin, (text) => {
-      const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Send))(text))
-      return body ? input.send(sessionID, body) : Promise.resolve(refuse(400, "The map sent an unknown request."))
-    })
+    return write(request, input.origin, Send, (body) => input.send(sessionID, body))
+  if (request.method === "POST" && kind === "answer")
+    return write(request, input.origin, Answer, (body) => input.answer(sessionID, body))
   if (request.method !== "GET") return missing()
   if (kind === undefined) return new Response(PAGE, { headers: PAGE_HEADERS })
   if (kind !== "data" && kind !== "stats") return missing()
@@ -325,14 +392,21 @@ async function respond(
 
 // A request that acts comes only from the map page itself: from the map server's own origin, as JSON, and small.
 // Other requests are refused before their body is read.
-async function write(request: Request, origin: string, act: (text: string) => Promise<Outcome>) {
+async function write<S extends Schema.Codec<unknown, unknown, never, never>>(
+  request: Request,
+  origin: string,
+  schema: S,
+  act: (body: S["Type"]) => Promise<Outcome>,
+) {
   if (request.headers.get("origin") !== origin) return reply(refuse(403, "Only the map page can send this."))
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
     return reply(refuse(415, "Send JSON."))
   if (Number(request.headers.get("content-length")) > MAX_BODY) return reply(refuse(413, "The request is too large."))
   const text = await request.text()
   if (text.length > MAX_BODY) return reply(refuse(413, "The request is too large."))
-  return reply(await act(text))
+  const body = Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text)
+  if (Option.isNone(body)) return reply(refuse(400, "The map sent an unknown request."))
+  return reply(await act(body.value))
 }
 
 function reply(outcome: Outcome) {

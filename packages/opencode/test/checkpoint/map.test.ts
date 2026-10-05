@@ -105,7 +105,10 @@ const waiting = Effect.fn("CheckpointMapTest.waiting")(function* () {
       tool: { messageID: part.messageID, callID: part.callID },
     })
     .pipe(Effect.forkChild)
-  yield* pollWithTimeout(question.list().pipe(Effect.map((items) => items[0])), "the checkpoint never asked the user")
+  yield* pollWithTimeout(
+    question.list().pipe(Effect.map((items) => items.find((item) => item.sessionID === info.id))),
+    "the checkpoint never asked the user",
+  )
   return { info, asked }
 })
 
@@ -181,7 +184,6 @@ it.instance("serves a session's map page, its data, and its study data behind a 
   }),
   // The first test of the file also starts the services the map asks the model through, which can take more than the
   // default 5 seconds.
-  {},
   15_000,
 )
 
@@ -206,7 +208,7 @@ it.instance("acts only on requests from the map page itself: behind the secret, 
     const url = new URL(yield* maps.url(info.id))
     const origin = url.origin
 
-    for (const kind of ["explain", "send"]) {
+    for (const kind of ["explain", "send", "answer"]) {
       const target = `${url.href}/${kind}`
       expect((yield* post(`${origin}/wrong-secret/${info.id}/${kind}`, { origin })).status).toBe(404)
       expect((yield* post(target, {})).status).toBe(403)
@@ -227,25 +229,24 @@ it.instance("acts only on requests from the map page itself: behind the secret, 
   }),
 )
 
-const revert = { number: 1, revision: 1, file: "src/greet.ts", chunk: 0, action: "revert" }
+const json = (response: Response) => Effect.promise(() => response.json())
 
-it.instance("sends a change asked for on the map to the waiting checkpoint as the user's revision request", () =>
+it.instance("sends what the user writes in the map's chat to the waiting checkpoint as their revision request", () =>
   Effect.gen(function* () {
     const maps = yield* CheckpointMap.Service
     const { info, asked } = yield* waiting()
     const url = new URL(yield* maps.url(info.id))
 
-    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify(revert) })
+    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify({ text: " Say hello. " }) })
 
-    const message = "In src/greet.ts, line 1 (checkpoint 1): revert this change."
     expect(sent.status).toBe(200)
-    expect(yield* Effect.promise(() => sent.json())).toEqual({ via: "revision", sent: message })
+    expect(yield* json(sent)).toEqual({ via: "revision", sent: "Say hello." })
     // The same answer as typing it in the terminal, which the checkpoint tool reads as a revision request.
-    expect(yield* Fiber.join(asked)).toEqual([[message]])
+    expect(yield* Fiber.join(asked)).toEqual([["Say hello."]])
   }),
 )
 
-it.instance("sends a change asked for on the map as a new message to the agent when no checkpoint is waiting", () =>
+it.instance("sends what the user writes in the map's chat as a new message to the agent when no checkpoint waits", () =>
   Effect.gen(function* () {
     const maps = yield* CheckpointMap.Service
     const info = yield* session()
@@ -257,16 +258,14 @@ it.instance("sends a change asked for on the map as a new message to the agent w
         }),
       ),
     )
-    const change = { ...revert, action: "change", text: "Say hello instead." }
 
-    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify(change) })
+    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify({ text: "Say hello." }) })
 
-    const message = "In src/greet.ts, line 1 (checkpoint 1): Say hello instead."
-    expect(yield* Effect.promise(() => sent.json())).toEqual({ via: "message", sent: message })
+    expect(yield* json(sent)).toEqual({ via: "message", sent: "Say hello." })
     yield* pollWithTimeout(Effect.sync(() => prompted[0]), "the message never reached the session")
     // The session's own agent and model, so the message does not switch it to another mode.
-    expect(prompted).toEqual([{ sessionID: info.id, agent: "understand", model, parts: [{ type: "text", text: message }] }])
-    const empty = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify({ ...change, text: " " }) })
+    expect(prompted).toEqual([{ sessionID: info.id, agent: "understand", model, parts: [{ type: "text", text: "Say hello." }] }])
+    const empty = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify({ text: " " }) })
     expect(empty.status).toBe(400)
   }),
 )
@@ -277,9 +276,42 @@ it.instance("cannot send a message to a session whose agent the map cannot reach
     const info = yield* session()
     const url = new URL(yield* maps.url(info.id))
 
-    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify(revert) })
+    const sent = yield* post(`${url.href}/send`, { origin: url.origin, body: JSON.stringify({ text: "Say hello." }) })
 
     expect(sent.status).toBe(503)
+  }),
+)
+
+it.instance("approves or stops the waiting checkpoint from the map, as its options in the terminal do", () =>
+  Effect.gen(function* () {
+    const maps = yield* CheckpointMap.Service
+    const approved = yield* waiting()
+    const stopped = yield* waiting()
+    const answer = (sessionID: SessionID, decision: string) =>
+      Effect.gen(function* () {
+        const url = new URL(yield* maps.url(sessionID))
+        return yield* post(`${url.href}/answer`, { origin: url.origin, body: JSON.stringify({ decision }) })
+      })
+
+    const first = yield* answer(approved.info.id, "approve")
+    const second = yield* answer(stopped.info.id, "stop")
+
+    expect(yield* json(first)).toEqual({ answered: "approve" })
+    expect(yield* json(second)).toEqual({ answered: "stop" })
+    expect(yield* Fiber.join(approved.asked)).toEqual([["Approve"]])
+    expect(yield* Fiber.join(stopped.asked)).toEqual([["Stop"]])
+  }),
+)
+
+it.instance("has nothing to approve when no checkpoint is waiting", () =>
+  Effect.gen(function* () {
+    const maps = yield* CheckpointMap.Service
+    const info = yield* session()
+    const url = new URL(yield* maps.url(info.id))
+
+    const answered = yield* post(`${url.href}/answer`, { origin: url.origin, body: JSON.stringify({ decision: "approve" }) })
+
+    expect(answered.status).toBe(409)
   }),
 )
 
@@ -421,6 +453,73 @@ describe("CheckpointMap.data", () => {
 
     expect(result.unreviewed.map((file) => [file.file, file.additions, file.deletions])).toEqual([
       ["src/cart.ts", 1, 1],
+    ])
+  })
+})
+
+describe("CheckpointMap.chat", () => {
+  test("shows the conversation: what the user and the agent wrote, the files the agent edits, and its checkpoints", () => {
+    const sessionID = SessionID.make("ses_chat")
+    const asked = MessageID.ascending()
+    const answered = MessageID.ascending()
+    const text = (messageID: MessageID, value: string, synthetic?: boolean): SessionV1.Part => ({
+      id: PartID.ascending(),
+      sessionID,
+      messageID,
+      type: "text",
+      text: value,
+      synthetic,
+    })
+    const messages: SessionV1.WithParts[] = [
+      {
+        info: { id: asked, sessionID, role: "user", time: { created: 0 }, agent: "understand", model },
+        parts: [text(asked, "Add a greeting."), text(asked, "Instructions OpenCode adds itself.", true)],
+      },
+      {
+        info: {
+          id: answered,
+          sessionID,
+          role: "assistant",
+          parentID: asked,
+          agent: "understand",
+          mode: "understand",
+          path: { cwd: "/p", root: "/p" },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.modelID,
+          providerID: model.providerID,
+          time: { created: 0 },
+        },
+        parts: [
+          text(answered, "I will add greet()."),
+          tool(sessionID, answered, "write", { ...completed({}), input: { filePath: "/p/src/greet.ts", content: "" } }),
+          tool(sessionID, answered, "edit", { status: "running", input: { filePath: "/p/src/main.ts" }, time: { start: 0 } }),
+          // OpenAI models edit with patches, which name their files themselves.
+          tool(sessionID, answered, "apply_patch", {
+            ...completed({}),
+            input: { patchText: "*** Begin Patch\n*** Update File: src/routes.ts\n@@\n-a\n+b\n*** Add File: /p/src/genres.ts\n+c\n*** End Patch" },
+          }),
+          tool(sessionID, answered, "read", completed({})),
+          tool(sessionID, answered, "checkpoint", completed({ ...checkpoint, decision: "revise", comment: "Say hello." })),
+          tool(sessionID, answered, "checkpoint", {
+            status: "running",
+            input: {},
+            metadata: { ...checkpoint, revision: 2, decision: undefined },
+            time: { start: 0 },
+          }),
+        ],
+      },
+    ]
+
+    expect(CheckpointMap.chat(messages, "/p").map((item) => [item.role, item.text])).toEqual([
+      ["user", "Add a greeting."],
+      ["agent", "I will add greet()."],
+      ["status", "Edited src/greet.ts"],
+      ["status", "Editing src/main.ts…"],
+      ["status", "Edited src/routes.ts and src/genres.ts"],
+      ["status", "Checkpoint 1: Add greeting · revision asked"],
+      ["user", "Say hello."],
+      ["status", "Checkpoint 1 (revision 2): Add greeting · waiting for your answer"],
     ])
   })
 })

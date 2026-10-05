@@ -2753,7 +2753,7 @@ const greeting = {
 }
 
 it.instance(
-  "a revert asked for on the map answers the waiting checkpoint as a revision request, which the agent reads",
+  "what the user writes in the map's chat answers the waiting checkpoint as a revision request, which the agent reads",
   () =>
     Effect.gen(function* () {
       const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -2770,24 +2770,22 @@ it.instance(
       yield* pollWithTimeout(question.list().pipe(Effect.map((items) => items[0])), "checkpoint never asked", "10 seconds")
 
       const url = new URL(yield* maps.url(sessionID))
-      const change = { number: 1, revision: 1, file: "greet.txt", chunk: 0, action: "revert" }
-      const sent = yield* fromMap(url, "send", change)
+      const sent = yield* fromMap(url, "send", { text: "Greet with hi instead." })
       yield* Fiber.join(loop)
 
-      const message = "In greet.txt, line 1 (checkpoint 1): revert this change."
-      expect(sent).toEqual({ status: 200, body: { via: "revision", sent: message } })
+      expect(sent).toEqual({ status: 200, body: { via: "revision", sent: "Greet with hi instead." } })
       const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
       const metadata = checkpoint?.state.status === "completed" ? checkpoint.state.metadata : undefined
-      expect([metadata?.decision, metadata?.comment]).toEqual(["revise", message])
+      expect([metadata?.decision, metadata?.comment]).toEqual(["revise", "Greet with hi instead."])
       // The agent read the request in the checkpoint's result.
-      expect(JSON.stringify((yield* llm.inputs)[3])).toContain(message)
+      expect(JSON.stringify((yield* llm.inputs)[3])).toContain("Greet with hi instead.")
     }),
   { git: true },
   15_000,
 )
 
 it.instance(
-  "a change asked for on the map after the run reaches the agent as a new message in the same session",
+  "what the user writes in the map's chat after the run reaches the agent as a new message, and its answer shows in the chat",
   () =>
     Effect.gen(function* () {
       const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -2805,11 +2803,9 @@ it.instance(
       yield* llm.text("I will say hi instead.")
 
       const url = new URL(yield* maps.url(sessionID))
-      const change = { number: 1, revision: 1, file: "greet.txt", chunk: 0, action: "change", text: "Say hi instead." }
-      const sent = yield* fromMap(url, "send", change)
+      const sent = yield* fromMap(url, "send", { text: "Say hi instead." })
 
-      const message = "In greet.txt, line 1 (checkpoint 1): Say hi instead."
-      expect(sent).toEqual({ status: 200, body: { via: "message", sent: message } })
+      expect(sent).toEqual({ status: 200, body: { via: "message", sent: "Say hi instead." } })
       // The agent answers it like a message typed in the terminal, in understand mode.
       yield* pollWithTimeout(
         sessions.messages({ sessionID }).pipe(
@@ -2822,8 +2818,42 @@ it.instance(
       )
       const asked = (yield* sessions.messages({ sessionID })).findLast((item) => item.info.role === "user")
       expect(asked?.info.role === "user" ? asked.info.agent : undefined).toBe("understand")
-      expect(asked?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))).toEqual([message])
-      expect(JSON.stringify((yield* llm.inputs)[4])).toContain(message)
+      expect(asked?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))).toEqual(["Say hi instead."])
+      expect(JSON.stringify((yield* llm.inputs)[4])).toContain("Say hi instead.")
+      const chat = (yield* Effect.promise(() => fetch(`${url.href}/data`).then((response) => response.json()))).chat
+      expect(chat.slice(-2).map((item: { role: string; text: string }) => [item.role, item.text])).toEqual([
+        ["user", "Say hi instead."],
+        ["agent", "I will say hi instead."],
+      ])
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "approving a waiting checkpoint on the map lets the agent continue, as approving it in the terminal does",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const question = yield* Question.Service
+      const maps = yield* CheckpointMap.Service
+      yield* llm.tool("write", { filePath: path.join(dir, "greet.txt"), content: "hello\n" })
+      yield* llm.tool("checkpoint", greeting)
+      yield* llm.text(flowAnswer)
+      yield* llm.text("done")
+      const sessionID = yield* understand("add a greeting file")
+      const loop = yield* prompt.loop({ sessionID }).pipe(Effect.forkChild)
+      yield* pollWithTimeout(question.list().pipe(Effect.map((items) => items[0])), "checkpoint never asked", "10 seconds")
+
+      const url = new URL(yield* maps.url(sessionID))
+      const answered = yield* fromMap(url, "answer", { decision: "approve" })
+      yield* Fiber.join(loop)
+
+      expect(answered).toEqual({ status: 200, body: { answered: "approve" } })
+      const [checkpoint] = yield* toolParts(sessionID, "checkpoint")
+      expect(checkpoint?.state.status === "completed" ? checkpoint.state.metadata.decision : undefined).toBe("approve")
+      expect(yield* llm.hits).toHaveLength(4)
     }),
   { git: true },
   15_000,
