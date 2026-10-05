@@ -62,7 +62,7 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--soft); pad
 .dot.off { background: var(--del); box-shadow: 0 0 0 3px var(--del-bg); }
 .button { border: 1px solid var(--rule); border-radius: 8px; padding: 6px 12px; background: var(--soft); color: var(--ink); text-decoration: none; font-size: 0.85rem; white-space: nowrap; cursor: pointer; display: inline-block; }
 .button:hover { border-color: var(--muted); }
-.page { max-width: 1120px; margin: 0 auto; padding: 18px 20px 80px; }
+.page { max-width: 1320px; margin: 0 auto; padding: 18px 20px 80px; }
 @media (max-width: 700px) { .page { padding: 12px 14px 60px; } }
 .working { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--mod-bg); color: var(--mod); font-size: 0.92rem; }
 .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 22px; }
@@ -80,7 +80,8 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--soft); pad
 .status.approve, .status.auto { color: var(--add); }
 .status.revise, .status.waiting { color: var(--wait); }
 .status.stop { color: var(--del); }
-section.part { margin: 0 0 38px; }
+section.part { margin: 0 0 38px; scroll-margin-top: 70px; }
+@media (max-width: 700px) { section.part { scroll-margin-top: 124px; } }
 .part > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 14px; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
 .part > header h2 { font-size: 1.25rem; margin: 0; }
 .tag { font-size: 0.7rem; font-weight: 700; border-radius: 6px; padding: 2px 8px; white-space: nowrap; letter-spacing: 0; text-transform: none; }
@@ -112,8 +113,12 @@ section.part { margin: 0 0 38px; }
 .node.missing { border-style: dashed; border-color: var(--del); }
 .label {
   position: absolute; width: max-content; display: flex; gap: 6px; align-items: flex-start; font-size: 0.82rem; line-height: 1.35; background: var(--sheet);
-  padding: 2px 6px; border-radius: 6px; box-shadow: 0 0 0 1px var(--rule);
+  padding: 2px 6px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--rule); text-align: left; cursor: pointer;
 }
+.label:hover { box-shadow: 0 0 0 1px var(--ink); }
+.node:not(.user):hover { box-shadow: 0 0 0 2px var(--rule); }
+.node.lit, .node.lit:hover { box-shadow: 0 0 0 3px var(--claim); }
+.label.lit { box-shadow: 0 0 0 2px var(--claim); }
 .label b { flex: none; min-width: 18px; height: 18px; border-radius: 9px; display: inline-grid; place-items: center; background: var(--claim); color: #fff; font-size: 0.7rem; }
 .label.unchecked { box-shadow: 0 0 0 1px var(--wait); }
 .label span { min-width: 0; overflow-wrap: anywhere; }
@@ -188,6 +193,27 @@ section.part { margin: 0 0 38px; }
 .risk { background: var(--wait-bg); border: 1px solid var(--wait); border-radius: 10px; padding: 10px 14px; display: grid; gap: 8px; min-width: 0; }
 .risk p { margin: 0; }
 .risks { margin: 0; padding-left: 1.2em; max-width: 90ch; display: grid; gap: 4px; }
+.flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.flow.open { grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); }
+.panel {
+  position: sticky; top: 64px; max-height: calc(100vh - 84px); overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
+  align-content: start; min-width: 0; background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; padding: 14px 16px; font-size: 0.94rem;
+}
+.panel > p { margin: 0; }
+/* The panel is narrow, so long lines of code wrap instead of scrolling sideways. */
+.panel .lines td.t { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .flow.open { grid-template-columns: minmax(0, 1fr); } .panel { position: static; max-height: none; } }
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.panel-head h3 { margin: 0; font: 700 1.02rem var(--mono); overflow-wrap: anywhere; }
+.panel-head .dir { font: 0.8rem var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.panel .facts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.panel .step { margin: 0; padding: 7px 10px; border-radius: 8px; background: var(--claim-bg); font-size: 0.88rem; display: flex; gap: 8px; align-items: flex-start; }
+.panel .step > span { min-width: 0; overflow-wrap: anywhere; }
+.panel .step b { flex: none; min-width: 18px; height: 18px; border-radius: 9px; display: inline-grid; place-items: center; background: var(--claim); color: #fff; font-size: 0.7rem; }
+.close { flex: none; border: 0; background: none; color: var(--muted); font-size: 1.35rem; line-height: 1; padding: 2px 7px; border-radius: 6px; cursor: pointer; }
+.close:hover { background: var(--soft); color: var(--ink); }
+.note p { margin: 0 0 4px; }
+.badge.plain { color: var(--muted); background: var(--soft); }
 </style>
 </head>
 <body>
@@ -201,7 +227,8 @@ section.part { margin: 0 0 38px; }
 (() => {
   "use strict"
   const base = location.pathname.replace(/\/$/, "")
-  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined }
+  // `panel` is the file the flowchart's side panel shows, and `step` the arrow that opened it.
+  const state = { raw: "", data: undefined, selected: undefined, follow: true, file: undefined, only: false, open: new Set(), folders: new Map(), mark: undefined, at: undefined, panel: undefined, step: undefined, reveal: false }
   // A link like ".../ses_x#2.1" opens checkpoint 2 directly.
   let wanted = decodeURIComponent(location.hash.slice(1)) || undefined
   const DECISIONS = {
@@ -321,11 +348,11 @@ section.part { margin: 0 0 38px; }
     })
   }
 
-  // Opens a file's full diff at the blocks where one of its functions changed.
-  function focus(id, file, index) {
+  // Opens a file's full diff at the blocks where one of its functions changed, in the view `go` shows it in.
+  function focus(id, file, index, go) {
     state.open.add(id)
     state.mark = { id, index }
-    pick(file)
+    go(file)
     requestAnimationFrame(() => {
       const target = document.querySelector("tr.where.mark")
       if (target) target.scrollIntoView({ behavior: "smooth", block: "center" })
@@ -340,21 +367,49 @@ section.part { margin: 0 0 38px; }
     render()
   }
 
-  // Shows a file in the project tree and its details, opening the folders on the way.
-  function pick(file, scroll) {
+  // Selects a file in the project tree, opening the folders on the way.
+  function select(file) {
     state.file = file
     file
       .split("/")
       .slice(0, -1)
       .forEach((_, index, parts) => state.folders.set(parts.slice(0, index + 1).join("/") + "/", true))
+  }
+
+  // Shows a file in the project tree and its details. The scroll waits for the frame in which render() puts the page
+  // back where it was, or that would stop it.
+  function pick(file, scroll) {
+    select(file)
     render()
-    if (scroll) document.getElementById("project")?.scrollIntoView({ behavior: "smooth", block: "start" })
+    if (scroll) requestAnimationFrame(() => document.getElementById("project")?.scrollIntoView({ behavior: "smooth", block: "start" }))
+  }
+
+  // Opens the side panel next to the flowchart for a box, or for the file an arrow points at; the same click again
+  // closes it. The project tree selects the same file, so both views stay on it.
+  function show(id, step) {
+    const again = state.panel === id && state.step === step
+    state.panel = again ? undefined : id
+    state.step = again ? undefined : step
+    state.reveal = !again
+    if (!again && known(id, state.data.checkpoints)) select(id)
+    render()
+  }
+
+  function hide() {
+    state.panel = undefined
+    state.step = undefined
+    render()
   }
 
   function render() {
     const data = state.data
     const page = document.getElementById("page")
     const y = window.scrollY
+    // The panel keeps its own scroll position while the page updates, unless it now shows another file.
+    const before = document.querySelector(".panel")
+    const kept = before && before.dataset.file === state.panel ? before.scrollTop : 0
+    // So does a diagram that scrolls sideways.
+    const left = document.querySelector(".machine")?.scrollLeft || 0
     document.title = "Understand map · " + data.session.title
     document.getElementById("session").textContent = data.session.title
     const list = data.checkpoints
@@ -384,7 +439,11 @@ section.part { margin: 0 0 38px; }
       page.append(el("p", "empty", "No checkpoint yet. The map fills in when the agent finishes its first feature."))
       return
     }
-    // Each checkpoint opens on its own first changed file.
+    // Each checkpoint opens on its own first changed file, with the flowchart's panel closed.
+    if (state.at !== key(entry)) {
+      state.panel = undefined
+      state.step = undefined
+    }
     if (state.at !== key(entry) || !state.file || !known(state.file, list)) state.file = entry.files[0] && entry.files[0].file
     state.at = key(entry)
     page.append(pills(list), hero(entry))
@@ -403,7 +462,29 @@ section.part { margin: 0 0 38px; }
     requestAnimationFrame(() => {
       layout()
       window.scrollTo(0, y)
+      const panel = document.querySelector(".panel")
+      if (panel) panel.scrollTop = kept
+      const area = document.querySelector(".machine")
+      if (area) area.scrollLeft = left
+      if (state.reveal) reveal(area, panel)
+      state.reveal = false
     })
+  }
+
+  // After a click opens the panel, the diagram is narrower: it scrolls sideways to keep the lit boxes in view, or the
+  // box the panel shows when they do not fit. On a narrow screen the panel sits below the diagram and scrolls into view.
+  function reveal(area, panel) {
+    const lit = area ? [...area.querySelectorAll(".node.lit")] : []
+    if (lit.length) {
+      const first = Math.min(...lit.map((box) => box.offsetLeft))
+      const last = Math.max(...lit.map((box) => box.offsetLeft + box.offsetWidth))
+      const shown = lit.find((box) => box.dataset.id === state.panel) || lit[0]
+      const middle = last - first <= area.clientWidth ? (first + last) / 2 : shown.offsetLeft + shown.offsetWidth / 2
+      area.scrollLeft = middle - area.clientWidth / 2
+    }
+    if (!panel || !window.matchMedia("(max-width: 900px)").matches) return
+    const top = panel.getBoundingClientRect().top + window.scrollY - document.querySelector(".top").offsetHeight - 8
+    window.scrollTo({ top, behavior: "smooth" })
   }
 
   function known(file, list) {
@@ -484,8 +565,47 @@ section.part { margin: 0 0 38px; }
     })
     const hint = el("p", "muted hint", "Scroll sideways to see the whole diagram.")
     hint.hidden = true
-    section.append(legend, why, area, hint, list)
+    const click = el("p", "muted explain", "Click a box, or the label of an arrow, to see what changed in that file next to the diagram.")
+    const view = append(el("div", "flow" + (state.panel ? " open" : "")), append(el("div"), area, hint))
+    if (state.panel) view.append(panel(entry, nodes, steps.find((step) => step.number === state.step)))
+    section.append(legend, why, click, view, list)
     return section
+  }
+
+  // The side panel next to the flowchart: what changed in the file a box or an arrow points at, and why.
+  function panel(entry, nodes, step) {
+    const id = state.panel
+    const box = el("aside", "panel")
+    box.dataset.file = id
+    box.setAttribute("aria-label", "What changed in " + id)
+    const close = el("button", "close", "×")
+    close.title = "Close"
+    close.setAttribute("aria-label", "Close")
+    close.addEventListener("click", hide)
+    const name = append(el("div"), el("h3", "", id.split("/").at(-1)))
+    if (id.includes("/")) name.append(el("div", "dir", "in " + id.slice(0, id.lastIndexOf("/") + 1)))
+    box.append(append(el("header", "panel-head"), name, close))
+    if (step) {
+      const title = (node) => nodes.find((item) => item.id === node).name
+      const text = append(el("span"), document.createTextNode(title(step.from) + " → " + title(step.to) + ": "), inline(el("span"), step.action))
+      box.append(append(el("p", "step"), el("b", "", String(step.number)), text))
+    }
+    const record = entry.files.find((file) => file.file === id)
+    const risk = (entry.affected || []).find((item) => item.file === id)
+    if (!record && !risk && !state.data.project.includes(id)) {
+      box.append(el("p", "muted", "The flowchart names this file, but it is not in the project."))
+      return box
+    }
+    const facts = el("div", "facts")
+    if (record) facts.append(el("span", "badge " + record.status, STATUS[record.status]), counts(record.additions, record.deletions))
+    if (!record) facts.append(el("span", "badge " + (risk ? "affected" : "plain"), risk ? "may be affected" : "unchanged"))
+    const tree = el("button", "toggle", "Show in the project tree")
+    tree.addEventListener("click", () => pick(id, true))
+    facts.append(tree)
+    // Links in the panel open the other file in the panel too.
+    const go = (file) => (file === state.panel ? render() : show(file))
+    box.append(facts, ...about(entry, id, go, "panel:" + key(entry) + ":" + id))
+    return box
   }
 
   function legendLine(dashed) {
@@ -516,8 +636,12 @@ section.part { margin: 0 0 38px; }
       const defs = svg("defs")
       defs.append(marker)
       drawing.append(defs)
+      // The picked arrow lights up both of its boxes; a picked box lights up on its own.
+      const picked = steps.find((step) => step.number === state.step)
+      const lit = (id) => (picked ? picked.from === id || picked.to === id : state.panel === id)
       const boxes = nodes.map((node, index) => {
-        const box = el("button", "node " + node.kind)
+        const box = el("button", "node " + node.kind + (lit(node.id) ? " lit" : ""))
+        box.dataset.id = node.id
         box.style.left = center(index) - width / 2 + "px"
         box.style.top = "16px"
         box.style.width = width + "px"
@@ -528,7 +652,7 @@ section.part { margin: 0 0 38px; }
         append(box, el("span", "name", node.name))
         if (node.folder) box.append(el("span", "folder", "in " + node.folder + "/"))
         box.append(el("span", "kind", word + (parts.length ? " · " + parts.join(", ") : "")))
-        if (node.file) box.addEventListener("click", () => pick(node.file, true))
+        if (node.kind !== "user") box.addEventListener("click", () => show(node.id))
         return box
       })
       // A label over an arrow stays between the two columns it joins; the label of a step inside one file sits beside it.
@@ -536,9 +660,12 @@ section.part { margin: 0 0 38px; }
         const a = at.get(step.from)
         const b = at.get(step.to)
         const unchecked = step.confirmed === false
-        const label = el("div", "label" + (unchecked ? " unchecked" : ""))
+        const label = el("button", "label" + (unchecked ? " unchecked" : "") + (state.step === step.number ? " lit" : ""))
         if (unchecked) label.title = "Not confirmed by the code: neither file imports the other"
         append(label, el("b", "", String(step.number)), inline(el("span"), step.action))
+        // An arrow opens the file it points at, or the file it starts from when it goes back to the user.
+        const target = step.to === "user" ? step.from : step.to
+        if (target !== "user") label.addEventListener("click", () => show(target, step.number))
         if (a === b) {
           label.style.left = center(a) + 40 + "px"
           label.style.maxWidth = Math.max(column - 52, 160) + "px"
@@ -639,7 +766,7 @@ section.part { margin: 0 0 38px; }
     tree.append(tools, branch(root, changes, risky, entry))
     if (files.length >= 3000) tree.append(el("p", "muted", "This project is large, so only part of it is listed."))
     const details = el("div", "details")
-    detail(details, entry, changes, risky)
+    detail(details, entry)
     section.append(append(el("div", "project"), tree, details))
     if (entry.unmatched && entry.unmatched.length) {
       section.append(
@@ -689,7 +816,7 @@ section.part { margin: 0 0 38px; }
       symbols.slice(0, MAX_SYMBOLS).forEach((symbol, index) => {
         const item = append(el("button", "row symbol"), el("span", "caret", ""), el("span", "name", named(symbol)), el("span", "change " + symbol.change, CHANGES[symbol.change]))
         item.title = named(symbol) + (symbol.change === "removed" ? ", removed from lines " : ", lines ") + symbol.start + "–" + symbol.end
-        item.addEventListener("click", () => focus(key(entry) + ":" + file, file, index))
+        item.addEventListener("click", () => focus(key(entry) + ":" + file, file, index, pick))
         parts.append(item)
       })
       if (symbols.length > MAX_SYMBOLS) parts.append(el("p", "muted more", symbols.length - MAX_SYMBOLS + " more in the file's details"))
@@ -699,61 +826,76 @@ section.part { margin: 0 0 38px; }
   }
 
   // What changed in the picked file and why: the agent's note next to the lines from the diff.
-  function detail(details, entry, changes, risky) {
+  function detail(details, entry) {
     const file = state.file
     if (!file) return details.append(el("p", "muted", "Click a file to see what changed in it and why."))
-    const record = changes.get(file)
-    const id = key(entry) + ":" + file
+    const record = entry.files.find((item) => item.file === file)
     const title = append(el("h3", "path"), document.createTextNode(file))
     if (record) title.append(el("span", "badge " + record.status, STATUS[record.status]), counts(record.additions, record.deletions))
-    details.append(title)
-    const risk = risky.get(file)
-    if (!record && !risk) details.append(el("p", "muted", "Not changed in this checkpoint."))
-    if (record) {
-      if (record.note)
-        details.append(field("What it is", record.note.purpose), field("What changed and why", record.note.change))
-      else details.append(el("p", "muted", "The agent wrote no note for this file."))
-      if (record.symbols && record.symbols.length) details.append(parts(record.symbols, id, file))
-    }
-    if (risk) details.append(warning(risk, entry))
+    details.append(title, ...about(entry, file, pick, key(entry) + ":" + file))
+  }
+
+  // A file in one checkpoint: the agent's note, the functions it changed, why it may break, the files around it, and
+  // its changed lines. The project view and the flowchart's panel both show it: `go` opens another file in the same
+  // place, and `id` keeps the state of its diff.
+  function about(entry, file, go, id) {
+    const record = entry.files.find((item) => item.file === file)
+    const risk = (entry.affected || []).find((item) => item.file === file)
+    const items = []
+    if (!record && !risk) items.push(el("p", "muted", "Not changed in this checkpoint."))
+    if (record && record.note) items.push(note(record.note))
+    if (record && !record.note) items.push(el("p", "muted", "The agent wrote no note for this file."))
+    if (record && record.symbols && record.symbols.length) items.push(parts(record.symbols, id, file, go))
+    if (risk) items.push(warning(risk, entry, go))
     const links = entry.links || []
     const near = (entry.affected || []).filter((item) => item.uses.includes(file)).map((item) => item.file)
     const uses = [...new Set(links.filter((link) => link.from === file).map((link) => link.to))]
     const users = [...new Set(links.filter((link) => link.to === file).map((link) => link.from))].filter((item) => !near.includes(item))
     if (uses.length || users.length || near.length) {
       const relations = el("div", "relations")
-      const chips = (items) => items.map((item) => {
+      const chips = (list) => list.map((item) => {
         const chip = el("button", "toggle", item)
-        chip.addEventListener("click", () => pick(item))
+        chip.addEventListener("click", () => go(item))
         return chip
       })
       if (uses.length) relations.append(append(el("span"), document.createTextNode("Uses"), ...chips(uses)))
       if (users.length) relations.append(append(el("span"), document.createTextNode("Used by"), ...chips(users)))
       if (near.length) relations.append(append(el("span"), document.createTextNode("Unchanged files that use it"), ...chips(near)))
-      details.append(relations)
+      items.push(relations)
     }
-    if (record) details.append(...diff(record, id))
+    if (record) items.push(...diff(record, id))
+    return items
+  }
+
+  // The agent's note about a file: claims, shown next to the computed diff.
+  function note(text) {
+    return append(
+      el("div", "field note"),
+      append(el("h4"), document.createTextNode("The agent's note"), tag("claim")),
+      inline(append(el("p"), el("b", "", "What it is: ")), text.purpose),
+      inline(append(el("p"), el("b", "", "What changed and why: ")), text.change),
+    )
   }
 
   // The functions and classes the change touched in a file; each opens the diff where it changed.
-  function parts(symbols, id, file) {
+  function parts(symbols, id, file, go) {
     const chips = el("div", "chips")
     symbols.forEach((symbol, index) => {
       const chip = append(el("button", "chip"), document.createTextNode(named(symbol)), el("span", "change " + symbol.change, CHANGES[symbol.change]))
-      chip.addEventListener("click", () => focus(id, file, index))
+      chip.addEventListener("click", () => focus(id, file, index, go))
       chips.append(chip)
     })
     return append(el("div", "field"), append(el("h4"), document.createTextNode("Functions and classes it changed"), tag("fact", "from the code")), chips)
   }
 
   // Why a file the checkpoint did not change may still break, with the lines where it uses what changed.
-  function warning(item, entry) {
+  function warning(item, entry, go) {
     const text = el("p")
     text.append(document.createTextNode("Not changed in this checkpoint, but it imports "))
     item.uses.forEach((used, index) => {
       if (index) text.append(document.createTextNode(index === item.uses.length - 1 ? " and " : ", "))
       const link = el("button", "toggle", used)
-      link.addEventListener("click", () => pick(used))
+      link.addEventListener("click", () => go(used))
       text.append(link)
     })
     text.append(document.createTextNode(", which changed."))
@@ -766,10 +908,6 @@ section.part { margin: 0 0 38px; }
       text,
       item.lines.length ? append(el("div", "lines"), table) : undefined,
     )
-  }
-
-  function field(title, text) {
-    return append(el("div", "field"), append(el("h4"), document.createTextNode(title), tag("claim", "agent")), inline(el("p"), text))
   }
 
   // The changed lines block by block, each under the functions it falls in; the whole diff opens on request.
@@ -875,6 +1013,20 @@ section.part { margin: 0 0 38px; }
     }
     setTimeout(poll, 1500)
   }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.panel) hide()
+  })
+  // The diagram's columns depend on its width, so it is laid out again when the window changes size.
+  let sizing = false
+  window.addEventListener("resize", () => {
+    if (sizing) return
+    sizing = true
+    requestAnimationFrame(() => {
+      sizing = false
+      layout()
+    })
+  })
   poll()
 })()
 </script>
